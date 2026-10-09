@@ -16,7 +16,7 @@ logging.basicConfig(
 )
 
 # ==================== 🔑 ቶክን እና ID የሚገባበት ቦታ ====================
-BOT_TOKEN = "8783351900:AAH1TaxIaURb8Wc6s3xHyBiF1RzVXaSxB04"
+BOT_TOKEN = "8783351900:AAGNyRekcgyZH70Kx3n1PpdLtYxzOrKTGEI"
 ADMIN_CHAT_ID = 1340095551
 
 # የትእዛዝ ሁኔታዎች (States)

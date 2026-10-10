@@ -1,4 +1,6 @@
 import logging
+from flask import Flask
+import threading
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
@@ -192,5 +194,23 @@ if __name__ == '__main__':
     )
 
     app.add_handler(conv_handler)
+    print("ቦቱ ስራ ጀምሯል...")
+    app.run_polling()
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
+if __name__ == '__main__':
+    # ዌብ ሰርቨሩን በሌላ Thread እናስነሳዋለን
+    t = threading.Thread(target=run_web)
+    t.daemon = True
+    t.start()
+    
+    # በመጨረሻም ቦቱን እናስጀምራለን
     print("ቦቱ ስራ ጀምሯል...")
     app.run_polling()

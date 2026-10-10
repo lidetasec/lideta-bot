@@ -200,17 +200,19 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot is running!"
-
-def run_web():
-    app.run(host='0.0.0.0', port=10000)
+    return "Lideta Security Bot is live!"
 
 if __name__ == '__main__':
-    # ዌብ ሰርቨሩን በሌላ Thread እናስነሳዋለን
-    t = threading.Thread(target=run_web)
-    t.daemon = True
-    t.start()
+    import os
+    port = int(os.environ.get("PORT", 10000))
     
-    # በመጨረሻም ቦቱን እናስጀምራለን
-    print("ቦቱ ስራ ጀምሯል...")
-    app.run_polling()
+    import threading
+    def run_bot():
+        print("ቦቱ ስራ ጀምሯል...")
+        app.run_polling()
+        
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    app.run(host='0.0.0.0', port=port)

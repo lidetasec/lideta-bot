@@ -200,25 +200,22 @@ from flask import Flask
 import threading
 import os
 
-# 1. የ Flask ዌብ ሰርቨር (Render ፖርቱን እንዲያገኝ)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Lideta Security Bot is live!"
 
-# 2. የቴሌግራም ቦቱን በ Background Thread ማሄድ
 def run_telegram_bot():
     print("ቦቱ ስራ ጀምሯል...")
     # (ማስታወሻ: የቴሌግራም አፕሊኬሽን ስምህ telegram_app መሆኑን አረጋግጥ)
     telegram_app.run_polling()
 
+# Gunicorn ፋይሉን ሲጭን ወዲያውኑ ቦቱን በ Background Thread እንዲያስነሳው ከዚህ በታች እናደርገዋለን
+bot_thread = threading.Thread(target=run_telegram_bot)
+bot_thread.daemon = True
+bot_thread.start()
+
 if __name__ == '__main__':
-    # ቦቱን በጀርባ እናስነሳዋለን
-    bot_thread = threading.Thread(target=run_telegram_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # ዌብ ሰርቨሩን በዋናው መስመር እናስኬዳለን (Render የሚጠብቀውን ፖርት 10000 በመጠቀም)
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)

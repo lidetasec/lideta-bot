@@ -199,6 +199,61 @@ if __name__ == '__main__':
 from flask import Flask, request
 import asyncio
 import os
+from telegram import Update
+from telegram.ext import Application
+
+# የ Flask ሰርቨር (Gunicorn ከዚህ ጋር ይገናኛል: bot:app)
+app = Flask(__name__)
+
+# የቴሌግራም ቦት ቶከን
+TOKEN = os.environ.get("TELEGRAM_TOKEN") 
+
+# ከ Flask ሰርቨር ጋር ስም እንዳይጋጭ የቴሌግራም አፕሊኬሽኑን telegram_app ብለን እንሰርዘዋለን/እንፈጥረዋለን
+telegram_app = Application.builder().token(TOKEN).build()
+
+# --- (እዚህጋ የነበሩህን CommandHandler እና MessageHandler ሃንድለሮችህን ማስገባት ትችላለህ) ---
+# ምሳሌ፦
+# from telegram.ext import CommandHandler
+# async def start(update, context):
+#     await update.message.reply_text("ሰላም! የሊደታ ሰብ-ሲቲ ጸጥታ ቢሮ ቦት ነው።")
+# telegram_app.add_handler(CommandHandler("start", start))
+# ----------------------------------------------------------------------------------
+
+@app.route('/')
+def home():
+    return "Lideta Security Bot is live with Webhook!"
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """ቴሌግራም የሚልካቸውን መረጃዎች የሚቀበልበት ዌብሁክ ኤንድፖይንት"""
+    if request.method == 'POST':
+        json_data = request.get_json()
+        update = Update.de_json(json_data, telegram_app.bot)
+        
+        async def process():
+            await telegram_app.initialize()
+            await telegram_app.process_update(update)
+            
+        asyncio.run(process())
+    return 'OK', 200
+
+# ሰርቨሩ ሲነሳ ዌብሁክን ከቴሌግራም ጋር ማያያዝ
+def set_webhook():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    async def init_webhook():
+        await telegram_app.initialize()
+        await telegram_app.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+    loop.run_until_complete(init_webhook())
+
+# ዌብሁክን ማስጀመር
+set_webhook()
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)from flask import Flask, request
+import asyncio
+import os
 
 app = Flask(__name__)
 

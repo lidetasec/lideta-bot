@@ -196,25 +196,41 @@ if __name__ == '__main__':
     app.add_handler(conv_handler)
     print("ቦቱ ስራ ጀምሯል...")
     app.run_polling()
-from flask import Flask
-import threading
+from flask import Flask, request
+import asyncio
 import os
 
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Lideta Security Bot is live!"
+    return "Lideta Security Bot is live with Webhook!"
 
-def run_telegram_bot():
-    print("ቦቱ ስራ ጀምሯል...")
-    # (ማስታወሻ: የቴሌግራም አፕሊኬሽን ስምህ telegram_app መሆኑን አረጋግጥ)
-    telegram_app.run_polling()
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """ቴሌግራም የሚልካቸውን መረጃዎች የሚቀበልበት ዌብሁክ ኤንድፖይንት"""
+    if request.method == 'POST':
+        json_data = request.get_json()
+        update = Update.de_json(json_data, application.bot)
+        
+        async def process():
+            await application.initialize()
+            await application.process_update(update)
+            
+        asyncio.run(process())
+    return 'OK', 200
 
-# Gunicorn ፋይሉን ሲጭን ወዲያውኑ ቦቱን በ Background Thread እንዲያስነሳው ከዚህ በታች እናደርገዋለን
-bot_thread = threading.Thread(target=run_telegram_bot)
-bot_thread.daemon = True
-bot_thread.start()
+# ሰርቨሩ ሲነሳ ዌብሁክን ከቴሌግራም ጋር ማያያዝ
+def set_webhook():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    async def init_webhook():
+        await application.initialize()
+        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+    loop.run_until_complete(init_webhook())
+
+# ዌብሁክን ማስጀመር
+set_webhook()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))

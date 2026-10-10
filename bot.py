@@ -200,23 +200,23 @@ from flask import Flask, request
 import asyncio
 import os
 from telegram import Update
-from telegram.ext import Application
+from telegram.ext import Application, CommandHandler  # <-- CommandHandler እዚህ ጋር መኖሩን አረጋግጥ
 
 app = Flask(__name__)
 
-# የቴሌግራም ቦት ቶከን
 TOKEN = os.environ.get("TELEGRAM_TOKEN") 
-
-# አፕሊኬሽኑን application (በትንንሽ ፊደል) ብለን እንሰርዘዋለን/እንፈጥራለን
 application = Application.builder().token(TOKEN).build()
 
-# --- (እዚህጋ የነበሩህን CommandHandler እና MessageHandler ሃንድለሮችህን ማስገባት ትችላለህ) ---
-# ምሳሌ፦
-# from telegram.ext import CommandHandler
-# async def start(update, context):
-#     await update.message.reply_text("ሰላም! የሊደታ ሰብ-ሲቲ ጸጥታ ቢሮ ቦት ነው።")
-# application.add_handler(CommandHandler("start", start))
-# ----------------------------------------------------------------------------------
+# ==========================================
+# የቦትህ ሃንድለሮች (Handlers) የሚገቡበት ቦታ እዚህ ጋር ነው
+# ==========================================
+async def start(update, context):
+    await update.message.reply_text("ሰላም! የሊደታ ሰብ-ሲቲ ጸጥታ ቢሮ ቦት ነው።")
+
+application.add_handler(CommandHandler("start", start))
+# (የቀሩትን የድሮ ሃንድለሮችህንም ካሉ እዚህ ጋር ነው የምታስገባቸው)
+# ==========================================
+
 
 @app.route('/')
 def home():
@@ -236,7 +236,6 @@ def webhook():
         asyncio.run(process())
     return 'OK', 200
 
-# ሰርቨሩ ሲነሳ ዌብሁክን ከቴሌግራም ጋር ማያያዝ
 def set_webhook():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -245,7 +244,6 @@ def set_webhook():
         await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
     loop.run_until_complete(init_webhook())
 
-# ዌብሁክን ማስጀመር
 set_webhook()
 
 if __name__ == '__main__':

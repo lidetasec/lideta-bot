@@ -5,26 +5,28 @@ from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# የሎጊንግ ማዋቀር (ስህተቶችን እና የቦቱን እንቅስቃሴዎች ለመከታተል)
+# ሎጊንግ ማዋቀር
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# የ Flask ሰርቨር ማዋቀር (Gunicorn ከዚህ ጋር ይገናኛል: bot:app)
+# Flask ሰርቨር ማዋቀር
 app = Flask(__name__)
 
-# የቴሌግራም ቦት ቶከን ከሬንደር Environment Variables ማንበብ
+# ቴሌግራም ቦት ቶከን ከሬንደር ማንበብ
 TOKEN = os.environ.get("TELEGRAM_TOKEN") 
 
-# የቴሌግራም አፕሊኬሽን ማዋቀር
+# ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # በምስሉ ላይ እንደሚታየው ትክክለኛ ምልክቶችን የያዙ ቁልፎች
+    # መነሻ ስቴት ማጽዳት
+    context.user_data.clear()
+    
     keyboard = [
         ["1/መረጃና ጥቆማ ለመስጠት"],
         ["2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ"],
@@ -35,7 +37,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-    # የሰላምታ መልእክት
     welcome_text = (
         "እንኳን ወደ ልደታ ክ/ከተማ ሰላምና ጸጥታ ጽሕፈት ቤት ቴሌግራም ቦት በሰላም መጡ። "
         "ከታች ያሉትን ቁልፎች በመጠቀም የሚፈልጉትን አገልግሎት ማግኘት ይችላሉ።"
@@ -46,23 +47,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 application.add_handler(CommandHandler("start", start))
 
 # ==========================================
-# 2. ተጠቃሚው በተኖቹን ሲነካ እና መልእክት ሲልክ የሚሰጠው ምላሽ
+# 2. መልዕክቶችን እና የደረጃ በደረጃ ሂደቶችን ማስተዳደር
 # ==========================================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    
+    state = context.user_data.get('state')
+
+    # ዋና ዋና ሜኑ በተኖች ሲጫኑ
     if text == "1/መረጃና ጥቆማ ለመስጠት":
-        context.user_data['waiting_for'] = 'tip'
+        context.user_data['state'] = 'TIP_WOREDA'
+        context.user_data['tip_data'] = {}
         await update.message.reply_text(
             "📍 **መረጃና ጥቆማ ለመስጠት**\n\n"
-            "እባክዎ መረጃዎን በሚከተለው መልኩ በጽሁፍ ይላኩልን፦\n"
-            "1. የሚሰጡበት ወረዳ\n"
-            "2. መረጃውን የሚሰጡበት ቀጠና እና ልዩ ቦታ\n"
-            "3. የጥቆማው ዝርዝር ሁኔታ\n\n"
-            "መልእክትዎ በሚስጥር ይጠበቃል።"
+            "እባክዎ መረጃውን የሚሰጡበትን **ወረዳ** ይጻፉልን፦"
         )
+        return
+
     elif text == "2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ":
-        context.user_data['waiting_for'] = None
+        context.user_data.clear()
         vision_mission_text = (
             "🌟 **ራዕይ (Vision)**\n"
             "በ2022 አዲስ አበባ ከተማችን በህዝብ ተሳትፎ ሠላምና ፀጥታ የሰፈነባት የህግ የበላይነት የተረጋገጠባት ለኑሮ፣ "
@@ -81,63 +83,63 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• የህግ የበላይነትን ማክበርና ማስከበር"
         )
         await update.message.reply_text(vision_mission_text)
-        
+        return
+
     elif text == "3/ቅሬታ ለማቅረብ":
-        context.user_data['waiting_for'] = 'complaint'
+        context.user_data['state'] = 'COMPLAINT_NAME'
+        context.user_data['complaint_data'] = {}
         await update.message.reply_text(
             "📝 **ቅሬታ ለማቅረብ**\n\n"
-            "እባክዎ ቅሬታዎን ለማስተናገድ የሚከተሉትን መረጃዎች ሙሉ በሙሉ ይጻፉልን፦\n"
-            "1. ሙሉ ስምዎ\n"
-            "2. ወረዳ\n"
-            "3. ቀጠና\n"
-            "4. የቤት ቁጥር\n"
-            "5. ቅሬታ የሚያቀርቡበት ዝርዝር ሁኔታ\n"
-            "6. ጽ/ቤቱ እንዲያደርግሎት የሚፈልጉት እገዛ/መፍትሄ\n"
-            "7. ምላሽ ለመስጠት እንችል ዘንድ ስልክ ቁጥሮን ያስገቡ"
+            "እባክዎ **ሙሉ ስምዎን** ያስገቡ፦"
         )
+        return
+
     elif text == "4/መመሪያዎችን ለመመልከት":
-        context.user_data['waiting_for'] = None
-        directives_text = (
+        context.user_data.clear()
+        await update.message.reply_text(
             "📂 **የጽ/ቤቱ መመሪያዎች እና ደንቦች**\n\n"
-            "1️⃣ **ደንብ ቁጥር ፩፻፵/፪ሺ፲፬ (የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ)**\n"
-            "• **ዓላማ፡** ነዋሪዎች በመንደር፣ በብሎክ እና በቀጠና አደረጃጀቶች ተደራጅተው ከፀጥታ ቋሚ ኃይሎች ጋር በመቀናጀት አካባቢያቸውን እንዲጠብቁ ማድረግ[cite: 38, 41]。\n"
-            "• **አደረጃጀት፡** የመንደር፣ የብሎክ እና የቀጠና የሰላም ሰራዊት አመራር ኮሚቴዎች[cite: 41, 42, 43, 44]。\n"
-            "• **ዋና ዋና ተግባራት፡** ሮንድ መውጣት፣ የፀጉረ-ልውጦች እና የሽብር እንቅስቃሴዎችን መከታተል፣ ህገ-ወጥ ግንባታዎችንና የመሬት ወረራዎችን መከላከል፣ የስነ-ምግባር ግንባታ መስራት[cite: 41, 42]。\n\n"
-            "2️⃣ **የጫኝና አውራጅ ማህበራት አሰጣጥ ለመከታተልና ለመቆጣጠር የወጣ መመሪያ እና የዋጋ ተመን**\n"
-            "• **ዓላማ፡** የጫኝና አውራጅ ማህበራትን አደረጃጀት፣ አሰራር እና የዋጋ ተመን በመወሰን የህብረተሰቡን እንግልት እና የተጋነነ ክፍያ ማስቀረት[cite: 72, 73, 79, 80]。\n"
-            "• **አባልነት መስፈርት፡** የነዋሪነት መታወቂያ ያለው፣ ከ18 ዓመት በላይ፣ ስራ አጥ፣ ከወንጀል ንጹህ የሆነ፣ ስነ-ምግባር ያለው[cite: 85]。\n"
-            "• **የዋጋ ተመን ማሻሻያ፡** የቤት እቃዎች፣ የኮንስትራክሽን እቃዎች፣ የቢሮ እቃዎች፣ ፍራፍሬዎች፣ አትክልቶች እና ጥራጥሬዎች መጫንና ማውረድ የተሻሻለ የዋጋ ተመን መመሪያ ተካትቷል።"
+            "እባክዎ ከዚህ በታች የተያያዙትን ሦስቱን ኦፊሴላዊ የፒዲኤፍ መመሪያዎች ማውረድ ይችላሉ፦"
         )
-        await update.message.reply_text(directives_text)
+        try:
+            await update.message.reply_document(
+                document=open('files/peace_army_ regulation.pdf', 'rb'), 
+                caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"
+            )
+            await update.message.reply_document(
+                document=open('files/loading_fee_ directive.pdf', 'rb'), 
+                caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን"
+            )
+            await update.message.reply_document(
+                document=open('files/loader_directive.pdf', 'rb'), 
+                caption="📄 3. ጫኝና አውራጅ መመሪያ"
+            )
+        except Exception as e:
+            logger.error(f"PDF sending error: {e}")
+            await update.message.reply_text(
+                "⚠️ ለጊዜው የመመሪያ ፒዲኤፍ ፋይሎቹን መጫን አልተቻለም። እባክዎ ፋይሎቹ በሰርቨር 'files' ፎልደር ውስጥ መኖራቸውን ያረጋግጡ።"
+            )
+        return
+
     elif text == "5/የአገልግሎት ስታንዳርዶች ለማየት":
-        context.user_data['waiting_for'] = None
-        standards_text = (
+        context.user_data.clear()
+        await update.message.reply_text(
             "📊 **የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች**\n\n"
-            "1️⃣ **የሃይማኖትና የሰላም እሴት ግንባታ ስራሂደት**\n"
-            "• የሃይማኖትና እምነት ተቋማት ድጋፍ፣ ክትትልና የምዝገባ ፈቃድ ማጣራት\n"
-            "• ህገ-መንግስታዊ እና የሴኩላሪዝም መርሆች አፈጻጸም ክትትል\n"
-            "• ህዝባዊና ሃይማኖታዊ ክብረ-በዓላት ሰላማዊ ክትትል\n"
-            "• የሰላም ግንባታ ስልጠናዎች፣ ህዝብ ለህዝብ ትስስር እና የሰላም ኮንፍረንሶች\n"
-            "• ባህላዊ የእርቅና ሽምግልና እሴቶች ግንባታ\n\n"
-            "2️⃣ **የማህበረሰብ ፀጥታ ንቅናቄና የብዙሃን ማህበራት ድጋፍ ስራሂደት**\n"
-            "• የማህበረሰብ ንቅናቄ፣ ፓናል ውይይቶች እና ኮንፍረንሶች ማስተባበር\n"
-            "• በነዋሪዎች ተሳትፎ የህዝብ ቅጥር ጥበቃ አደረጃጀት እና ስምሪት\n"
-            "• የማህበረሰብ ተኮር 7/24 ጸጥታ አጠባበቅ እና ምክክር መድረኮች\n"
-            "• የሰላም ሰራዊት እና ጫኝና አውራጅ ማህበራት ምልመላ፣ ስልጠናና ስምሪት ክትትል\n\n"
-            "3️⃣ **የፀጥታ መረጃ ግጭት ቅድመ ማስጠንቀቂያና ፈጣን ምላሽ ስራሂደት**\n"
-            "• የ24 ሰዓት የፀጥታ መረጃ መሰብሰብ፣ ማጣራትና መተንተን\n"
-            "• የማንነትና ቡድን ፀብ፣ ፀረ-ሰላም ሃይሎች እና ድንበር ተሻጋሪ ሽብርተኞች ክትትል\n"
-            "• የተደራጁ ወንጀሎች፣ ሌብነት፣ ቅሚያ፣ ህገ-ወጥ የጦር መሳሪያና የገንዘብ ዝውውር ክትትል\n"
-            "• የግጭት ቅድመ ማስጠንቀቂያ፣ ፈጣን ምላሽ እና የመሬት ወረራ/ህገወጥ ግንባታ ግጭቶች አፈታት\n\n"
-            "4️⃣ **የፀጥታ ጉዳዮች ክትትል ቁጥጥርና ኦፕሬሽን ስራሂደት**\n"
-            "• ህገ-ወጥ ተግባራትንና ወንጀል መከላከል፣ እርምጃ መውሰድና ማስወሰድ\n"
-            "• ድንገተኛ የፀጥታ ኦፕሬሽን እና በዓላት/ኩነቶች ፀጥታ አስተባባሪነት\n"
-            "• ግጭት መፍታትና ማስተዳደር እንዲሁም ቅሬታዎችን መፍታት\n"
-            "• የማህበረሰብ አቀፍ ፖሊስ ማዕከላት፣ የግል ጥበቃ ኤጀንሲዎች እና የተቋማት ደህንነት ክትትል"
+            "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
         )
-        await update.message.reply_text(standards_text)
+        try:
+            await update.message.reply_document(
+                document=open('files/service_standards.pdf', 'rb'), 
+                caption="📊 የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች ሰነድ"
+            )
+        except Exception as e:
+            logger.error(f"Standards PDF sending error: {e}")
+            await update.message.reply_text(
+                "⚠️ ለጊዜው የስታንዳርድ ፒዲኤፍ ሰነዱን መጫን አልተቻለም።"
+            )
+        return
+
     elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
-        context.user_data['waiting_for'] = 'feedback_rating'
+        context.user_data['state'] = 'FEEDBACK_RATING'
         await update.message.reply_text(
             "⭐ **አገልግሎቶች ላይ አስተያየት ለመስጠት**\n\n"
             "በጽ/ቤቱ አገልግሎቶች ምን ያህል እረክተዋል? እባክዎን ከታች ካሉት አማራጮች አንዱን ይምረጡ፦\n\n"
@@ -146,24 +148,91 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ሐ) መካከለኛ\n"
             "መ) ዝቅተኛ"
         )
+        return
+
+    # ==========================================
+    # 3. የጥቆማ (Tip) የደረጃ በደረጃ አሰጣጥ ሂደት
+    # ==========================================
+    if state == 'TIP_WOREDA':
+        context.user_data['tip_data']['woreda'] = text
+        context.user_data['state'] = 'TIP_LOCATION'
+        await update.message.reply_text("መረጃውን የሚሰጡበትን **ቀጠና እና ልዩ ቦታ** ይጻፉልን፦")
+        return
+
+    elif state == 'TIP_LOCATION':
+        context.user_data['tip_data']['location'] = text
+        context.user_data['state'] = 'TIP_DETAILS'
+        await update.message.reply_text("የጥቆማውን **ዝርዝር ሁኔታ** ይግለጹልን፦")
+        return
+
+    elif state == 'TIP_DETAILS':
+        context.user_data['tip_data']['details'] = text
+        context.user_data.clear()
+        await update.message.reply_text("ስለሰጡን መረጃና ጥቆማ እናመሰግናለን!")
+        return
+
+    # ==========================================
+    # 4. የቅሬታ (Complaint) የደረጃ በደረጃ አሰጣጥ ሂደት
+    # ==========================================
+    elif state == 'COMPLAINT_NAME':
+        context.user_data['complaint_data']['name'] = text
+        context.user_data['state'] = 'COMPLAINT_WOREDA'
+        await update.message.reply_text("እባክዎ የሚገኙበትን **ወረዳ** ያስገቡ፦")
+        return
+
+    elif state == 'COMPLAINT_WOREDA':
+        context.user_data['complaint_data']['woreda'] = text
+        context.user_data['state'] = 'COMPLAINT_ZONE'
+        await update.message.reply_text("እባክዎ **ቀጠና** ያስገቡ፦")
+        return
+
+    elif state == 'COMPLAINT_ZONE':
+        context.user_data['complaint_data']['zone'] = text
+        context.user_data['state'] = 'COMPLAINT_HOUSE'
+        await update.message.reply_text("እባክዎ **የቤት ቁጥር** ያስገቡ፦")
+        return
+
+    elif state == 'COMPLAINT_HOUSE':
+        context.user_data['complaint_data']['house'] = text
+        context.user_data['state'] = 'COMPLAINT_DETAILS'
+        await update.message.reply_text("ቅሬታ የሚያቀርቡበትን **ዝርዝር ሁኔታ** ይግለጹ፦")
+        return
+
+    elif state == 'COMPLAINT_DETAILS':
+        context.user_data['complaint_data']['details'] = text
+        context.user_data['state'] = 'COMPLAINT_HELP'
+        await update.message.reply_text("ጽ/ቤቱ እንዲያደርግሎት የሚፈልጉትን **እገዛ/መፍትሄ** ይግለጹ፦")
+        return
+
+    elif state == 'COMPLAINT_HELP':
+        context.user_data['complaint_data']['help'] = text
+        context.user_data['state'] = 'COMPLAINT_PHONE'
+        await update.message.reply_text("ምላሽ ለመስጠት እንችል ዘንድ **ስልክ ቁጥርዎን** ያስገቡ፦")
+        return
+
+    elif state == 'COMPLAINT_PHONE':
+        context.user_data['complaint_data']['phone'] = text
+        context.user_data.clear()
+        await update.message.reply_text("ቅሬታዎ ደርሶናል በአጭር ግዜ ውስጥ ምላሽ እንሰጣለን")
+        return
+
+    # ==========================================
+    # 5. የአስተያየት (Feedback) ሂደት
+    # ==========================================
+    elif state == 'FEEDBACK_RATING':
+        context.user_data['state'] = 'FEEDBACK_COMMENT'
+        await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉትን አስተያየትዎን ይግለፁ")
+        return
+
+    elif state == 'FEEDBACK_COMMENT':
+        context.user_data.clear()
+        await update.message.reply_text("አስተያየትዎን ስለሰጡን እናመሰግናለን!")
+        return
+
     else:
-        waiting_for = context.user_data.get('waiting_for')
-        if waiting_for == 'tip':
-            context.user_data['waiting_for'] = None
-            await update.message.reply_text("ስለሰጡን መረጃና ጥቆማ እናመሰግናለን!")
-        elif waiting_for == 'complaint':
-            context.user_data['waiting_for'] = None
-            await update.message.reply_text("ቅሬታዎ ደርሶናል በአጭር ግዜ ውስጥ ምላሽ እንሰጣለን")
-        elif waiting_for == 'feedback_rating':
-            context.user_data['waiting_for'] = 'feedback_comment'
-            await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉትን አስተያየትዎን ይግለፁ")
-        elif waiting_for == 'feedback_comment':
-            context.user_data['waiting_for'] = None
-            await update.message.reply_text("አስተያየትዎን ስለሰጡን እናመሰግናለን!")
-        else:
-            await update.message.reply_text(
-                "መልእክትዎ ደርሷል። እናመሰግናለን!"
-            )
+        await update.message.reply_text(
+            "እባክዎ ከታች ካሉት ቁልፎች (Buttons) አንዱን በመምረጥ አገልግሎቱን ይጠቀሙ።"
+        )
 
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

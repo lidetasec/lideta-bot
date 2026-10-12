@@ -52,8 +52,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = context.user_data.get('state')
 
-    # ዋና ዋና ሜኑ በተኖች ሲጫኑ
+    # ዋና ዋና ሜኑ በተኖች ሲጫኑ (ማንኛውንም የቆየ ስቴት በማጽዳት በንጹህ ይጀምራል)
     if text == "1/መረጃና ጥቆማ ለመስጠት":
+        context.user_data.clear()
         context.user_data['state'] = 'TIP_WOREDA'
         context.user_data['tip_data'] = {}
         await update.message.reply_text(
@@ -85,6 +86,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text == "3/ቅሬታ ለማቅረብ":
+        context.user_data.clear()
         context.user_data['state'] = 'COMPLAINT_NAME'
         context.user_data['complaint_data'] = {}
         await update.message.reply_text(
@@ -133,14 +135,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.error(f"Standards PDF sending error: {e}")
                 await update.message.reply_text("⚠️ ለጊዜው የስታንዳርድ ፒዲኤፍ ሰነዱን መጫን አልተቻለም።")
         else:
-            await update.message.reply_text("⚠️ የስታንዳርድ ፒዲኤፍ ፋይል አልተገኘምሚ።")
+            await update.message.reply_text("⚠️ የስታንዳርድ ፒዲኤፍ ፋይል አልተገኘምም።")
         return
 
     elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
+        context.user_data.clear()
         context.user_data['state'] = 'FEEDBACK_RATING'
+        context.user_data['feedback_data'] = {}
         await update.message.reply_text(
             "⭐ **አገልግሎቶች ላይ አስተያየት ለመስጠት**\n\n"
-            "በጽ/ቤቱ አገልግሎቶች ምን ያህል እረክተዋል? እባክዎን ከታች ካሉት አማራጮች አንዱን ይምረጡ፦\n\n"
+            "በጽ/ቤቱ አገልግሎቶች ምን ያህል እረክተዋል? (ለምሳሌ፦ ‹ሀ› ወይም ‹በጣም ከፍተኛ› እያሉ መጻፍ ይችላሉ)\n\n"
             "ሀ) በጣም ከፍተኛ\n"
             "ለ) ከፍተኛ\n"
             "ሐ) መካከለኛ\n"
@@ -218,11 +222,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 5. የአስተያየት (Feedback) ሂደት
     # ==========================================
     elif state == 'FEEDBACK_RATING':
+        context.user_data['feedback_data']['rating'] = text
         context.user_data['state'] = 'FEEDBACK_COMMENT'
-        await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉትን አስተያየትዎን ይግለፁ")
+        await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉትን አስተያየትዎን እዚህ ይፃፉ፦")
         return
 
     elif state == 'FEEDBACK_COMMENT':
+        context.user_data['feedback_data']['comment'] = text
         context.user_data.clear()
         await update.message.reply_text("አስተያየትዎን ስለሰጡን እናመሰግናለን!")
         return

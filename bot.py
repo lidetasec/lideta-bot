@@ -24,10 +24,10 @@ application = Application.builder().token(TOKEN).build()
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
 # ==========================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ተጠቃሚው የሚመርጣቸው 6ቱ ቁልፎች
+    # በምስሉ ላይ እንደሚታየው ትክክለኛ ምልክቶችን የያዙ ቁልፎች
     keyboard = [
         ["1/መረጃና ጥቆማ ለመስጠት"],
-        ["2/ስለ ፅ/ቤቱ ራዕይ ፣ተልዕኮ እና እሴቶች ለማወቅ"],
+        ["2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ"],
         ["3/ቅሬታ ለማቅረብ"],
         ["4/መመሪያዎችን ለመመልከት"],
         ["5/የአገልግሎት ስታንዳርዶች ለማየት"],
@@ -52,7 +52,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
     if text == "1/መረጃና ጥቆማ ለመስጠት":
-        # ተጠቃሚው መረጃ እንዲልክ መጠበቁን ምልክት ማድረግ
         context.user_data['waiting_for'] = 'tip'
         await update.message.reply_text(
             "📍 **መረጃና ጥቆማ ለመስጠት**\n\n"
@@ -62,7 +61,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "3. የጥቆማው ዝርዝር ሁኔታ\n\n"
             "መልእክትዎ በሚስጥር ይጠበቃል።"
         )
-    elif text == "2/ስለ ፅ/ቤቱ ራዕይ ፣ተልዕኮ እና እሴቶች ለማወቅ":
+    elif text == "2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ":
         context.user_data['waiting_for'] = None
         vision_mission_text = (
             "🌟 **ራዕይ (Vision)**\n"
@@ -84,7 +83,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(vision_mission_text)
         
     elif text == "3/ቅሬታ ለማቅረብ":
-        # ተጠቃሚው ቅሬታ እንዲልክ መጠበቁን ምልክት ማድረግ
         context.user_data['waiting_for'] = 'complaint'
         await update.message.reply_text(
             "📝 **ቅሬታ ለማቅረብ**\n\n"
@@ -139,7 +137,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(standards_text)
     elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
-        # ተጠቃሚው ደረጃ እንዲሰጥ መጠበቁን ምልክት ማድረግ
         context.user_data['waiting_for'] = 'feedback_rating'
         await update.message.reply_text(
             "⭐ **አገልግሎቶች ላይ አስተያየት ለመስጠት**\n\n"
@@ -150,7 +147,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "መ) ዝቅተኛ"
         )
     else:
-        # ተጠቃሚው የላከውን መልእክት አይነት በመለየት ተገቢውን ምላሽ መስጠት
         waiting_for = context.user_data.get('waiting_for')
         if waiting_for == 'tip':
             context.user_data['waiting_for'] = None
@@ -159,11 +155,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['waiting_for'] = None
             await update.message.reply_text("ቅሬታዎ ደርሶናል በአጭር ግዜ ውስጥ ምላሽ እንሰጣለን")
         elif waiting_for == 'feedback_rating':
-            # ተጠቃሚው ደረጃውን መርጧል, አሁን አስተያየቱን እንዲገልጽ መጠየቅ
             context.user_data['waiting_for'] = 'feedback_comment'
             await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉትን አስተያየትዎን ይግለፁ")
         elif waiting_for == 'feedback_comment':
-            # ተጠቃሚው አስተያየቱን ልኮ ጨርሷል
             context.user_data['waiting_for'] = None
             await update.message.reply_text("አስተያየትዎን ስለሰጡን እናመሰግናለን!")
         else:
@@ -182,7 +176,6 @@ def home():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """ቴሌግራም የሚልካቸውን መረጃዎች የሚቀበልበት ዌብሁክ ኤንድፖይንት"""
     if request.method == 'POST':
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
@@ -194,7 +187,6 @@ def webhook():
         asyncio.run(process())
     return 'OK', 200
 
-# ሰርቨሩ ሲነሳ ዌብሁክን ከቴሌግራም ጋር ማያያዝ
 def set_webhook():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -203,7 +195,6 @@ def set_webhook():
         await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
     loop.run_until_complete(init_webhook())
 
-# ዌብሁክን ማስጀመር
 set_webhook()
 
 if __name__ == '__main__':

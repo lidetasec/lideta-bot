@@ -1,275 +1,511 @@
 import logging
-import os
-import asyncio
-from flask import Flask, request
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import sqlite3
+from datetime import datetime
+from functools import wraps
+from pathlib import Path
 
-# ሎጊንግ ማዋቀር
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters,
 )
-logger = logging.getLogger(__name__)
 
-# Flask ሰርቨር ማዋቀር
-app = Flask(__name__)
+import config
 
-# ቴሌግራም ቦት ቶከን ከሬንደር ማንበብ
-TOKEN = os.environ.get("TELEGRAM_TOKEN") 
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+log = logging.getLogger(__name__)
 
-# ቴሌግራም አፕሊኬሽን ማዋቀር
-application = Application.builder().token(TOKEN).build()
+BASE_DIR = Path(__file__).resolve().parent
+PDF_DIR = BASE_DIR / "pdfs"
+DB_PATH = BASE_DIR / "bot_data.db"
 
-# ==========================================
-# 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
-# ==========================================
+# ---------- የውይይት ደረጃዎች ----------
+(
+    S_WEREDA, S_ZONE, S_PLACE, S_DETAIL,                              # ጥቆማ
+    C_NAME, C_WEREDA, C_ZONE, C_HOUSE, C_DETAIL, C_REQUEST, C_PHONE,  # ቅሬታ
+    F_RATING, F_IMPROVE,                                              # አስተያየት
+) = range(13)
+
+RATINGS = {
+    "r_a": "በጣም ከፍተኛ",
+    "r_b": "ከፍተኛ",
+    "r_c": "መካከለኛ",
+    "r_d": "ዝቅተኛ",
+}
+
+ALLOWED_PDFS = {f for f, _ in config.GUIDE_PDFS} | {config.STANDARD_PDF[0]}
+
+
+# ---------- ዳታቤዝ (በኮምፒውተርህ ላይ) ----------
+def get_conn():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_conn()
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS suggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created TEXT, wereda TEXT, zone TEXT, place TEXT, detail TEXT
+        );
+        CREATE TABLE IF NOT EXISTS complaints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created TEXT, user_id INTEGER, full_name TEXT, wereda TEXT, zone TEXT,
+            house_no TEXT, detail TEXT, request TEXT, phone TEXT,
+            status TEXT DEFAULT 'አዲስ', reply TEXT
+        );
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created TEXT, rating TEXT, improve TEXT
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+# ---------- ምናሌዎች ----------
+WELCOME = (
+    "እንኳን ወደ ልደታ ክ/ከተማ ሰላምና ጸጥታ ጽሕፈት ቤት ቴሌግራም ቦት በሰላም መጡ።\n"
+    "ከታች ያሉትን ቁልፎች በመጠቀም የሚፈልጉትን አገልግሎት ማግኘት ይችላሉ።"
+)
+
+
+def main_menu_markup():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("1️⃣ መረጃና ጥቆማ ለመስጠት", callback_data="suggest")],
+        [InlineKeyboardButton("2️⃣ ራዕይ፣ ተልዕኮና እሴቶች", callback_data="vision")],
+        [InlineKeyboardButton("3️⃣ ቅሬታ ለማቅረብ", callback_data="complaint")],
+        [InlineKeyboardButton("4️⃣ መመሪያዎችን ለመመልከት", callback_data="guides")],
+        [InlineKeyboardButton("5️⃣ የአገልግሎት ስታንዳርዶች", callback_data="standards")],
+        [InlineKeyboardButton("6️⃣ በአገልግሎቱ ላይ አስተያየት", callback_data="feedback")],
+    ])
+
+
+def back_markup():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ ወደ ዋና ምናሌ", callback_data="menu")]])
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    
-    keyboard = [
-        ["1/መረጃና ጥቆማ ለመስጠት"],
-        ["2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ"],
-        ["3/ቅሬታ ለማቅረብ"],
-        ["4/መመሪያዎችን ለመመልከት"],
-        ["5/የአገልግሎት ስታንዳርዶች ለማየት"],
-        ["6/አገልግሎቶች ላይ አስተያየት ለመስጠት"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text(WELCOME, reply_markup=main_menu_markup())
+    return ConversationHandler.END
 
-    welcome_text = (
-        "እንኳን ወደ ልደታ ክ/ከተማ ሰላምና ጸጥታ ጽሕፈት ቤት ቴሌግራም ቦት በሰላም መጡ። "
-        "ከታች ያሉትን ቁልፎች በመጠቀም የሚፈልጉትን አገልግሎት ማግኘት ይችላሉ።"
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data.clear()
+    await q.message.reply_text(WELCOME, reply_markup=main_menu_markup())
+    return ConversationHandler.END
+
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("ተሰርዟል።", reply_markup=main_menu_markup())
+    return ConversationHandler.END
+
+
+# ---------- ራዕይ፣ ተልዕኮ፣ እሴቶች ----------
+async def show_vision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    text = (
+        f"🌟 ራዕይ\n{config.VISION}\n\n"
+        f"🎯 ተልዕኮ\n{config.MISSION}\n\n"
+        f"💎 እሴቶች\n{config.VALUES}"
     )
-    
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    await q.message.reply_text(text, reply_markup=back_markup())
 
-application.add_handler(CommandHandler("start", start))
 
-# ==========================================
-# 2. መልዕክቶችን እና የደረጃ በደረጃ ሂደቶችን ማስተዳደር
-# ==========================================
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    state = context.user_data.get('state')
-
-    # ዋና ዋና ሜኑ በተኖች ሲጫኑ (ማንኛውንም የቆየ ስቴት በማጽዳት በንጹህ ይጀምራል)
-    if text == "1/መረጃና ጥቆማ ለመስጠት":
-        context.user_data.clear()
-        context.user_data['state'] = 'TIP_WOREDA'
-        context.user_data['tip_data'] = {}
-        await update.message.reply_text(
-            "📍 **መረጃና ጥቆማ ለመስጠት**\n\n"
-            "እባክዎ መረጃውን የሚሰጡበትን **ወረዳ** ይጻፉልን፦"
+# ---------- መመሪያዎችና ስታንዳርዶች (PDF) ----------
+async def send_pdf(chat_id, fname, context: ContextTypes.DEFAULT_TYPE):
+    path = PDF_DIR / fname
+    if not path.exists():
+        await context.bot.send_message(
+            chat_id, "ይቅርታ፣ ፋይሉ ገና አልተጫነም። እባክዎ ለአስተዳዳሪው ያሳውቁ።", reply_markup=back_markup()
         )
         return
+    with path.open("rb") as f:
+        await context.bot.send_document(chat_id, document=f, filename=fname)
+    await context.bot.send_message(chat_id, "ሰነዱ ተልኳል።", reply_markup=back_markup())
 
-    elif text == "2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ":
-        context.user_data.clear()
-        vision_mission_text = (
-            "🌟 **ራዕይ (Vision)**\n"
-            "በ2022 አዲስ አበባ ከተማችን በህዝብ ተሳትፎ ሠላምና ፀጥታ የሰፈነባት የህግ የበላይነት የተረጋገጠባት ለኑሮ፣ "
-            "ለስራ እና ለመዝናኛ ተመራጭ የሆነች ከተማ ሆና ማየት፤\n\n"
-            "🎯 **ተልዕኮ**\n"
-            "የተቀናጀ የጸጥታ ጉዳዮች አስተዳደር እና የግጭት ቅድመ ማስጠንቀቂያና ፈጣን ምላሽ ስርዓትን ተግባራዊ በማድረግ ወንጀልን በመከላከል፤ "
-            "የሰላም እሴቶችን በመገንባት፣ በሃይማኖትና እምነት ተከታዮች መካከል መከባበርና መቻቻል እንዲሰፍን በማድረግ፤ የክትትል፤ "
-            "ቁጥጥር እና ቀልጣፋ አገልግሎት አሰጣጥ ስርዓት በመዘርጋት፣ ነዋሪውንና ባለድርሻ አካላትን ተሳትፎና ባለቤትነት በማረጋገጥ "
-            "ሰላም፣ ጸጥታና ደህንነቷ የተጠበቀ እና ህግና ስርዓት የተከበረባት ከተማ ማድረግ ነው፡፡\n\n"
-            "💎 **እሴቶች**\n"
-            "• ታማኝነትና ተጠያቂነት\n"
-            "• ሚስጥር ጠባቂነት\n"
-            "• ፍትሐዊነትና ሰብዓዊነት\n"
-            "• ለላቀ ሰላም እና ጸጥታ መትጋት\n"
-            "• ተቋማዊ አጋርነት\n"
-            "• የህግ የበላይነትን ማክበርና ማስከበር"
+
+async def show_guides(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    kb = [[InlineKeyboardButton(title, callback_data=f"pdf:{fname}")] for fname, title in config.GUIDE_PDFS]
+    kb.append([InlineKeyboardButton("⬅️ ወደ ዋና ምናሌ", callback_data="menu")])
+    await q.message.reply_text("ማየት የሚፈልጉትን መመሪያ ይምረጡ፦", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def pdf_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    fname = q.data.split(":", 1)[1]
+    if fname not in ALLOWED_PDFS:
+        await q.message.reply_text("ይቅርታ፣ ይህ ፋይል አይገኝም።", reply_markup=back_markup())
+        return
+    await send_pdf(q.message.chat_id, fname, context)
+
+
+async def show_standards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await send_pdf(q.message.chat_id, config.STANDARD_PDF[0], context)
+
+
+# ---------- 1. መረጃና ጥቆማ ----------
+async def suggest_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data.clear()
+    await q.message.reply_text("ጥቆማዎን ለመስጠት የሚመለከተውን ወረዳ ይጻፉ (በቁጥርም ሆነ በፅሁፍ)።")
+    return S_WEREDA
+
+
+async def s_wereda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["wereda"] = update.message.text.strip()
+    await update.message.reply_text("ቀጠናውን ይግለጹ (በቁጥርም ሆነ በፅሁፍ)።")
+    return S_ZONE
+
+
+async def s_zone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["zone"] = update.message.text.strip()
+    await update.message.reply_text("ልዩ ቦታውን ይግለጹ።")
+    return S_PLACE
+
+
+async def s_place(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["place"] = update.message.text.strip()
+    await update.message.reply_text("የጥቆማውን ዝርዝር ሁኔታ ይግለጹ።")
+    return S_DETAIL
+
+
+async def s_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    d = context.user_data
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO suggestions (created, wereda, zone, place, detail) VALUES (?, ?, ?, ?, ?)",
+        (now(), d["wereda"], d["zone"], d["place"], update.message.text.strip()),
+    )
+    conn.commit()
+    conn.close()
+    context.user_data.clear()
+    await update.message.reply_text("ለሰጡን መረጃና ጥቆማ እናመሰግናለን።", reply_markup=back_markup())
+    return ConversationHandler.END
+
+
+# ---------- 3. ቅሬታ ----------
+async def complaint_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data.clear()
+    await q.message.reply_text("ሙሉ ስምዎን ያስገቡ።")
+    return C_NAME
+
+
+async def c_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["full_name"] = update.message.text.strip()
+    await update.message.reply_text("ወረዳዎን ይጻፉ (በቁጥርም ሆነ በፅሁፍ)።")
+    return C_WEREDA
+
+
+async def c_wereda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["wereda"] = update.message.text.strip()
+    await update.message.reply_text("ቀጠናዎን ይጻፉ (በቁጥርም ሆነ በፅሁፍ)።")
+    return C_ZONE
+
+
+async def c_zone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["zone"] = update.message.text.strip()
+    await update.message.reply_text("የቤት ቁጥርዎን በቁጥር ብቻ ይጻፉ።")
+    return C_HOUSE
+
+
+async def c_house(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.text.strip().isdigit():
+        await update.message.reply_text("እባክዎ የቤት ቁጥርን በቁጥር ብቻ ይጻፉ።")
+        return C_HOUSE
+    context.user_data["house_no"] = update.message.text.strip()
+    await update.message.reply_text("ቅሬታዎን በዝርዝር ይግለጹ።")
+    return C_DETAIL
+
+
+async def c_detail(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["detail"] = update.message.text.strip()
+    await update.message.reply_text("ጽ/ቤቱ እንዲያደርግልዎ የሚፈልጉትን ይግለጹ።")
+    return C_REQUEST
+
+
+async def c_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["request"] = update.message.text.strip()
+    await update.message.reply_text("ለምላሽ እንድንደውልልዎ ስልክ ቁጥርዎን በቁጥር ብቻ ይጻፉ።")
+    return C_PHONE
+
+
+async def c_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    phone = update.message.text.strip().replace("+", "").replace(" ", "")
+    if not phone.isdigit() or len(phone) < 9:
+        await update.message.reply_text("እባክዎ ትክክለኛ ስልክ ቁጥር በቁጥር ብቻ ይጻፉ።")
+        return C_PHONE
+
+    d = context.user_data
+    conn = get_conn()
+    cur = conn.execute(
+        """INSERT INTO complaints
+           (created, user_id, full_name, wereda, zone, house_no, detail, request, phone)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (now(), update.effective_user.id, d["full_name"], d["wereda"], d["zone"],
+         d["house_no"], d["detail"], d["request"], phone),
+    )
+    complaint_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+
+    text = (
+        f"🆕 አዲስ ቅሬታ #{complaint_id}\n"
+        f"ስም: {d['full_name']}\n"
+        f"ወረዳ: {d['wereda']} | ቀጠና: {d['zone']} | ቤት ቁጥር: {d['house_no']}\n"
+        f"ዝርዝር: {d['detail']}\n"
+        f"የሚጠይቁት: {d['request']}\n"
+        f"ስልክ: {phone}\n\n"
+        f"ምላሽ ለመስጠት: /reply {complaint_id} ምላሽዎ"
+    )
+    for admin_id in config.ADMIN_IDS:
+        try:
+            await context.bot.send_message(admin_id, text)
+        except Exception as e:
+            log.warning("ለአስተዳዳሪ %s መላክ አልተቻለም: %s", admin_id, e)
+
+    context.user_data.clear()
+    await update.message.reply_text(
+        f"ቅሬታዎ ተቀብሏል። የቅሬታ ቁጥርዎ፦ {complaint_id}\nለቅሬታው ምላሽ እንሰጥዎታለን።",
+        reply_markup=back_markup(),
+    )
+    return ConversationHandler.END
+
+
+# ---------- 6. አስተያየት ----------
+async def feedback_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ሀ/ በጣም ከፍተኛ", callback_data="r_a")],
+        [InlineKeyboardButton("ለ/ ከፍተኛ", callback_data="r_b")],
+        [InlineKeyboardButton("ሐ/ መካከለኛ", callback_data="r_c")],
+        [InlineKeyboardButton("መ/ ዝቅተኛ", callback_data="r_d")],
+    ])
+    await q.message.reply_text("በጽ/ቤቱ ያገኙትን አገልግሎት እንዴት ይገልጹታል?", reply_markup=kb)
+    return F_RATING
+
+
+async def f_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data["rating"] = RATINGS[q.data]
+    await q.message.reply_text('በቀጣይ መስተካከል ያለበት ነገር ካለ እዚህ ይፃፉ።\n(ከሌለ "-" ብለው ይላኩ)')
+    return F_IMPROVE
+
+
+async def f_improve(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    improve = "" if text == "-" else text
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO feedback (created, rating, improve) VALUES (?, ?, ?)",
+        (now(), context.user_data.get("rating", ""), improve),
+    )
+    conn.commit()
+    conn.close()
+    context.user_data.clear()
+    await update.message.reply_text("ስለሰጡን አስተያየት እናመሰግናለን።", reply_markup=back_markup())
+    return ConversationHandler.END
+
+
+# ---------- የአስተዳዳሪ ክፍል ----------
+def admin_only(func):
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_user.id not in config.ADMIN_IDS:
+            await update.message.reply_text("ይቅርታ፣ ይህ ትዕዛዝ ለአስተዳዳሪዎች ብቻ ነው።")
+            return
+        return await func(update, context)
+    return wrapper
+
+
+@admin_only
+async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "የአስተዳዳሪ ትዕዛዞች፦\n"
+        "/complaints - የቅሬታዎች ዝርዝር (የመጨረሻዎቹ 10)\n"
+        "/complaint ቁጥር - የአንድ ቅሬታ ሙሉ ዝርዝር\n"
+        "/reply ቁጥር ምላሽ - ለቅሬታ ምላሽ መስጠት\n"
+        "/suggestions - የጥቆማዎች ዝርዝር (የመጨረሻዎቹ 10)\n"
+        "/feedbacks - የአስተያየቶች ማጠቃለያ"
+    )
+
+
+@admin_only
+async def admin_complaints(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM complaints ORDER BY id DESC LIMIT 10").fetchall()
+    conn.close()
+    if not rows:
+        await update.message.reply_text("ምንም ቅሬታ የለም።")
+        return
+    lines = [f"#{r['id']} | {r['full_name']} | {r['wereda']} | {r['status']}" for r in rows]
+    await update.message.reply_text("\n".join(lines) + "\n\nዝርዝር ለማየት: /complaint ቁጥር")
+
+
+@admin_only
+async def admin_complaint(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text("አጠቃቀም: /complaint ቁጥር")
+        return
+    conn = get_conn()
+    r = conn.execute("SELECT * FROM complaints WHERE id = ?", (int(context.args[0]),)).fetchone()
+    conn.close()
+    if not r:
+        await update.message.reply_text("ይህ ቁጥር ያለው ቅሬታ አልተገኘም።")
+        return
+    await update.message.reply_text(
+        f"ቅሬታ #{r['id']} ({r['created']})\n"
+        f"ስም: {r['full_name']}\n"
+        f"ወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቤት ቁጥር: {r['house_no']}\n"
+        f"ስልክ: {r['phone']}\n"
+        f"ዝርዝር: {r['detail']}\n"
+        f"የሚጠይቁት: {r['request']}\n"
+        f"ሁኔታ: {r['status']}\n"
+        f"ምላሽ: {r['reply'] or '—'}"
+    )
+
+
+@admin_only
+async def admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2 or not context.args[0].isdigit():
+        await update.message.reply_text("አጠቃቀም: /reply ቁጥር ምላሽዎ")
+        return
+    complaint_id = int(context.args[0])
+    answer = " ".join(context.args[1:])
+
+    conn = get_conn()
+    r = conn.execute("SELECT * FROM complaints WHERE id = ?", (complaint_id,)).fetchone()
+    if not r:
+        conn.close()
+        await update.message.reply_text("ይህ ቁጥር ያለው ቅሬታ አልተገኘም።")
+        return
+
+    conn.execute(
+        "UPDATE complaints SET reply = ?, status = 'ምላሽ ተሰጥቷል' WHERE id = ?",
+        (answer, complaint_id),
+    )
+    conn.commit()
+    conn.close()
+
+    try:
+        await context.bot.send_message(
+            r["user_id"],
+            f"ለቅሬታ ቁጥር {complaint_id} የተሰጠ ምላሽ፦\n\n{answer}",
         )
-        await update.message.reply_text(vision_mission_text)
+        await update.message.reply_text("ምላሹ ለቅሬታ አቅራቢው ተልኳል ✅")
+    except Exception as e:
+        log.error("ምላሽ መላክ አልተቻለም: %s", e)
+        await update.message.reply_text("ምላሹ ተመዝግቧል፣ ግን ለተጠቃሚው መላክ አልተቻለም።")
+
+
+@admin_only
+async def admin_suggestions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM suggestions ORDER BY id DESC LIMIT 10").fetchall()
+    conn.close()
+    if not rows:
+        await update.message.reply_text("ምንም ጥቆማ የለም።")
         return
+    text = "\n\n".join(
+        f"#{r['id']} ({r['created']})\nወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቦታ: {r['place']}\n{r['detail']}"
+        for r in rows
+    )
+    await update.message.reply_text(text[:4000])
 
-    elif text == "3/ቅሬታ ለማቅረብ":
-        context.user_data.clear()
-        context.user_data['state'] = 'COMPLAINT_NAME'
-        context.user_data['complaint_data'] = {}
-        await update.message.reply_text(
-            "📝 **ቅሬታ ለማቅረብ**\n\n"
-            "እባክዎ **ሙሉ ስምዎን** ያስገቡ፦"
-        )
+
+@admin_only
+async def admin_feedbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    conn = get_conn()
+    rows = conn.execute("SELECT rating, COUNT(*) AS n FROM feedback GROUP BY rating").fetchall()
+    conn.close()
+    if not rows:
+        await update.message.reply_text("ምንም አስተያየት የለም።")
         return
+    lines = [f"{r['rating']}: {r['n']}" for r in rows]
+    await update.message.reply_text("የአስተያየቶች ማጠቃለያ፦\n" + "\n".join(lines))
 
-    elif text == "4/መመሪያዎችን ለመመልከት":
-        context.user_data.clear()
-        await update.message.reply_text(
-            "📂 **የጽ/ቤቱ መመሪያዎች እና ደንቦች**\n\n"
-            "እባክዎ ከዚህ በታች የተያያዙትን ሦስቱን ኦፊሴላዊ የፒዲኤፍ መመሪያዎች ማውረድ ይችላሉ፦"
-        )
-        
-        files_to_send = [
-            ("peace_army_regulation.pdf", "📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"),
-            ("loading_fee_directive.pdf", "📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን"),
-            ("loader_directive.pdf", "📄 3. ጫኝና አውራጅ መመሪያ")
-        ]
-        
-        for file_name, caption in files_to_send:
-            if os.path.exists(file_name):
-                try:
-                    await update.message.reply_document(document=open(file_name, 'rb'), caption=caption)
-                except Exception as e:
-                    logger.error(f"Error sending {file_name}: {e}")
-            else:
-                await update.message.reply_text(f"⚠️ ፋይል አልተገኘም: {file_name}")
-        return
 
-    elif text == "5/የአገልግሎት ስታንዳርዶች ለማየት":
-        context.user_data.clear()
-        await update.message.reply_text(
-            "📊 **የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች**\n\n"
-            "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
-        )
-        std_path = "service_standards.pdf"
-        if os.path.exists(std_path):
-            try:
-                await update.message.reply_document(
-                    document=open(std_path, 'rb'), 
-                    caption="📊 የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች ሰነድ"
-                )
-            except Exception as e:
-                logger.error(f"Standards PDF sending error: {e}")
-                await update.message.reply_text("⚠️ ለጊዜው የስታንዳርድ ፒዲኤፍ ሰነዱን መጫን አልተቻለም።")
-        else:
-            await update.message.reply_text("⚠️ የስታንዳርድ ፒዲኤፍ ፋይል አልተገኘምም።")
-        return
+# ---------- ዋና ----------
+def main():
+    init_db()
+    PDF_DIR.mkdir(exist_ok=True)
 
-    elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
-        context.user_data.clear()
-        context.user_data['state'] = 'FEEDBACK_RATING'
-        context.user_data['feedback_data'] = {}
-        await update.message.reply_text(
-            "⭐ **አገልግሎቶች ላይ አስተያየት ለመስጠት**\n\n"
-            "በጽ/ቤቱ አገልግሎቶች ምን ያህል እረክተዋል? (ለምሳሌ፦ ‹ሀ› ወይም ‹በጣም ከፍተኛ› እያሉ መጻፍ ይችላሉ)\n\n"
-            "ሀ) በጣም ከፍተኛ\n"
-            "ለ) ከፍተኛ\n"
-            "ሐ) መካከለኛ\n"
-            "መ) ዝቅተኛ"
-        )
-        return
+    app = Application.builder().token(config.BOT_TOKEN).build()
 
-    # ==========================================
-    # 3. የጥቆማ (Tip) የደረጃ በደረጃ አሰጣጥ ሂደት
-    # ==========================================
-    if state == 'TIP_WOREDA':
-        context.user_data['tip_data']['woreda'] = text
-        context.user_data['state'] = 'TIP_LOCATION'
-        await update.message.reply_text("መረጃውን የሚሰጡበትን **ቀጠና እና ልዩ ቦታ** ይጻፉልን፦")
-        return
+    text_filter = filters.TEXT & ~filters.COMMAND
 
-    elif state == 'TIP_LOCATION':
-        context.user_data['tip_data']['location'] = text
-        context.user_data['state'] = 'TIP_DETAILS'
-        await update.message.reply_text("የጥቆማውን **ዝርዝር ሁኔታ** ይግለጹልን፦")
-        return
+    conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(suggest_start, pattern="^suggest$"),
+            CallbackQueryHandler(complaint_start, pattern="^complaint$"),
+            CallbackQueryHandler(feedback_start, pattern="^feedback$"),
+        ],
+        states={
+            S_WEREDA: [MessageHandler(text_filter, s_wereda)],
+            S_ZONE: [MessageHandler(text_filter, s_zone)],
+            S_PLACE: [MessageHandler(text_filter, s_place)],
+            S_DETAIL: [MessageHandler(text_filter, s_detail)],
+            C_NAME: [MessageHandler(text_filter, c_name)],
+            C_WEREDA: [MessageHandler(text_filter, c_wereda)],
+            C_ZONE: [MessageHandler(text_filter, c_zone)],
+            C_HOUSE: [MessageHandler(text_filter, c_house)],
+            C_DETAIL: [MessageHandler(text_filter, c_detail)],
+            C_REQUEST: [MessageHandler(text_filter, c_request)],
+            C_PHONE: [MessageHandler(text_filter, c_phone)],
+            F_RATING: [CallbackQueryHandler(f_rating, pattern="^r_")],
+            F_IMPROVE: [MessageHandler(text_filter, f_improve)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", start),
+            CallbackQueryHandler(menu_callback, pattern="^menu$"),
+        ],
+    )
 
-    elif state == 'TIP_DETAILS':
-        context.user_data['tip_data']['details'] = text
-        context.user_data.clear()
-        await update.message.reply_text("ስለሰጡን መረጃና ጥቆማ እናመሰግናለን!")
-        return
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu$"))
+    app.add_handler(CallbackQueryHandler(show_vision, pattern="^vision$"))
+    app.add_handler(CallbackQueryHandler(show_guides, pattern="^guides$"))
+    app.add_handler(CallbackQueryHandler(pdf_callback, pattern="^pdf:"))
+    app.add_handler(CallbackQueryHandler(show_standards, pattern="^standards$"))
 
-    # ==========================================
-    # 4. የቅሬታ (Complaint) የደረጃ በደረጃ አሰጣጥ ሂደት
-    # ==========================================
-    elif state == 'COMPLAINT_NAME':
-        context.user_data['complaint_data']['name'] = text
-        context.user_data['state'] = 'COMPLAINT_WOREDA'
-        await update.message.reply_text("እባክዎ የሚገኙበትን **ወረዳ** ያስገቡ፦")
-        return
+    app.add_handler(CommandHandler("admin", admin_help))
+    app.add_handler(CommandHandler("complaints", admin_complaints))
+    app.add_handler(CommandHandler("complaint", admin_complaint))
+    app.add_handler(CommandHandler("reply", admin_reply))
+    app.add_handler(CommandHandler("suggestions", admin_suggestions))
+    app.add_handler(CommandHandler("feedbacks", admin_feedbacks))
 
-    elif state == 'COMPLAINT_WOREDA':
-        context.user_data['complaint_data']['woreda'] = text
-        context.user_data['state'] = 'COMPLAINT_ZONE'
-        await update.message.reply_text("እባክዎ **ቀጠና** ያስገቡ፦")
-        return
+    log.info("ቦቱ ተነስቷል...")
+    app.run_polling()
 
-    elif state == 'COMPLAINT_ZONE':
-        context.user_data['complaint_data']['zone'] = text
-        context.user_data['state'] = 'COMPLAINT_HOUSE'
-        await update.message.reply_text("እባክዎ **የቤት ቁጥር** ያስገቡ፦")
-        return
 
-    elif state == 'COMPLAINT_HOUSE':
-        context.user_data['complaint_data']['house'] = text
-        context.user_data['state'] = 'COMPLAINT_DETAILS'
-        await update.message.reply_text("ቅሬታ የሚያቀርቡበትን **ዝርዝር ሁኔታ** ይግለጹ፦")
-        return
-
-    elif state == 'COMPLAINT_DETAILS':
-        context.user_data['complaint_data']['details'] = text
-        context.user_data['state'] = 'COMPLAINT_HELP'
-        await update.message.reply_text("ጽ/ቤቱ እንዲያደርግሎት የሚፈልጉትን **እገዛ/መፍትሄ** ይግለጹ፦")
-        return
-
-    elif state == 'COMPLAINT_HELP':
-        context.user_data['complaint_data']['help'] = text
-        context.user_data['state'] = 'COMPLAINT_PHONE'
-        await update.message.reply_text("ምላሽ ለመስጠት እንችል ዘንድ **ስልክ ቁጥርዎን** ያስገቡ፦")
-        return
-
-    elif state == 'COMPLAINT_PHONE':
-        context.user_data['complaint_data']['phone'] = text
-        context.user_data.clear()
-        await update.message.reply_text("ቅሬታዎ ደርሶናል በአጭር ግዜ ውስጥ ምላሽ እንሰጣለን")
-        return
-
-    # ==========================================
-    # 5. የአስተያየት (Feedback) ሂደት
-    # ==========================================
-    elif state == 'FEEDBACK_RATING':
-        context.user_data['feedback_data']['rating'] = text
-        context.user_data['state'] = 'FEEDBACK_COMMENT'
-        await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉትን አስተያየትዎን እዚህ ይፃፉ፦")
-        return
-
-    elif state == 'FEEDBACK_COMMENT':
-        context.user_data['feedback_data']['comment'] = text
-        context.user_data.clear()
-        await update.message.reply_text("አስተያየትዎን ስለሰጡን እናመሰግናለን!")
-        return
-
-    else:
-        await update.message.reply_text(
-            "እባክዎ ከታች ካሉት ቁልፎች (Buttons) አንዱን በመምረጥ አገልግሎቱን ይጠቀሙ።"
-        )
-
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# ==========================================
-# 3. የ Flask እና Webhook ማዋቀሪያ ክፍሎች
-# ==========================================
-@app.route('/')
-def home():
-    return "Lideta Security Bot is live with Webhook!"
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.method == 'POST':
-        json_data = request.get_json()
-        update = Update.de_json(json_data, application.bot)
-        
-        async def process():
-            await application.initialize()
-            await application.process_update(update)
-            
-        asyncio.run(process())
-    return 'OK', 200
-
-def set_webhook():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    async def init_webhook():
-        await application.initialize()
-        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-    loop.run_until_complete(init_webhook())
-
-set_webhook()
-
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    main()

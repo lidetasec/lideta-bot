@@ -27,6 +27,7 @@ asyncio.set_event_loop(loop)
 
 async def setup_bot():
     await application.initialize()
+    await application.start()  # <-- እጅግ ወሳኝ የሆነው ትዕዛዝ (ቦቱ እንዲነቃ የሚያደርገው)
     await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
 
 loop.run_until_complete(setup_bot())

@@ -21,7 +21,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር (ለተጠቃሚ መረጃ እና ሁኔታዎች እንዳይጠፉ)
+# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር
 bot_loop = asyncio.new_event_loop()
 
 def start_background_loop(loop):
@@ -48,10 +48,12 @@ def load_pdfs():
 
 load_pdfs()
 
+# ቦቱን አስቀድሞ ማዋቀር እና ማስጀመር
 async def initialize_bot():
-    await application.initialize()
-    await application.start()
-    await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+    if not application.running:
+        await application.initialize()
+        await application.start()
+        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
 
 asyncio.run_coroutine_threadsafe(initialize_bot(), bot_loop)
 
@@ -270,10 +272,16 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        # ቋሚ በሆነው የጀርባ ኢቨንት ሉፕ እንዲሰራ ማድረግ (State እንዳይጠፋ)
-        asyncio.run_coroutine_threadsafe(
-            application.process_update(update), bot_loop
-        )
+        async def process():
+            if not application.running:
+                await initialize_bot()
+            await application.process_update(update)
+
+        future = asyncio.run_coroutine_threadsafe(process(), bot_loop)
+        try:
+            future.result(timeout=15) # ሂደቱ እስኪጠናቀቅ በትዕግስት መጠበቅ
+        except Exception as e:
+            logger.error(f"Webhook processing error: {e}")
             
     return 'OK', 200
 

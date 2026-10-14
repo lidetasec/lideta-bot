@@ -21,17 +21,6 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ቋሚ የኢቨንት ሉፕ ማዋቀር (ቦቱ በመሀል እንዳይቆም)
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-async def setup_bot():
-    await application.initialize()
-    await application.start()  # <-- እጅግ ወሳኝ የሆነው ትዕዛዝ (ቦቱ እንዲነቃ የሚያደርገው)
-    await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-
-loop.run_until_complete(setup_bot())
-
 # ፒዲኤፍ ፋይሎችን አስቀድሞ በሜሞሪ መጫን (ለፈጣን ምላሽ)
 pdf_cache = {}
 def load_pdfs():
@@ -261,17 +250,26 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_m
 def home():
     return "Lideta Security Bot is live with Webhook!"
 
+is_initialized = False
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    global is_initialized
     if request.method == 'POST':
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        future = asyncio.run_coroutine_threadsafe(
-            application.process_update(update), loop
-        )
+        async def process():
+            global is_initialized
+            if not is_initialized:
+                await application.initialize()
+                await application.start()
+                await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+                is_initialized = True
+            await application.process_update(update)
+            
         try:
-            future.result(timeout=10)
+            asyncio.run(process())
         except Exception as e:
             logger.error(f"Webhook processing error: {e}")
             

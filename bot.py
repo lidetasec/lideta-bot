@@ -20,6 +20,17 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
+# ቦቱ ሲነሳ አፕሊኬሽኑን አንድ ጊዜ ማዋቀር (Initialization)
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+async def post_init():
+    await application.initialize()
+    # የዌብሁክ ሊንክ በራስ ሰር ማስተካከል
+    await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+
+loop.run_until_complete(post_init())
+
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
 # ==========================================
@@ -243,22 +254,12 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
+        # ዌብሁኩን ያለ አላስፈላጊ ሪ-ኢኒሻላይዜሽን በቀጥታ ማስተኬድ
         async def process():
-            await application.initialize()
             await application.process_update(update)
             
         asyncio.run(process())
     return 'OK', 200
-
-def set_webhook():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    async def init_webhook():
-        await application.initialize()
-        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-    loop.run_until_complete(init_webhook())
-
-set_webhook()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 10000))

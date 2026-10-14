@@ -1,8 +1,8 @@
-import logging
+mport logging
 import os
 import asyncio
 from flask import Flask, request
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ሎጊንግ ማዋቀር
@@ -20,16 +20,31 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ቦቱ ሲነሳ አፕሊኬሽኑን አንድ ጊዜ ማዋቀር (Initialization)
+# ቋሚ የኢቨንት ሉፕ ማዋቀር (ቦቱ በመሀል እንዳይቆም)
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
-async def post_init():
+async def setup_bot():
     await application.initialize()
-    # የዌብሁክ ሊንክ በራስ ሰር ማስተካከል
     await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
 
-loop.run_until_complete(post_init())
+loop.run_until_complete(setup_bot())
+
+# ፒዲኤፍ ፋይሎችን አስቀድሞ በሜሞሪ መጫን (ለፈጣን ምላሽ)
+pdf_cache = {}
+def load_pdfs():
+    files = {
+        'peace': 'peace_army_regulation.pdf',
+        'fee': 'loading_fee_directive.pdf',
+        'loader': 'loader_directive.pdf',
+        'standards': 'service_standards.pdf'
+    }
+    for key, filename in files.items():
+        if os.path.exists(filename):
+            with open(filename, 'rb') as f:
+                pdf_cache[key] = f.read()
+
+load_pdfs()
 
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
@@ -113,18 +128,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "እባክዎ ከዚህ በታች የተያያዙትን ሦስቱን ኦፊሴላዊ የፒዲኤፍ መመሪያዎች ማውረድ ይችላሉ፦"
         )
         
-        await update.message.reply_document(
-            document=open('peace_army_regulation.pdf', 'rb'), 
-            caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"
-        )
-        await update.message.reply_document(
-            document=open('loading_fee_directive.pdf', 'rb'), 
-            caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን"
-        )
-        await update.message.reply_document(
-            document=open('loader_directive.pdf', 'rb'), 
-            caption="📄 3. ጫኝና አውራጅ መመሪያ"
-        )
+        if 'peace' in pdf_cache:
+            await update.message.reply_document(document=pdf_cache['peace'], filename="peace_army_regulation.pdf", caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ")
+        if 'fee' in pdf_cache:
+            await update.message.reply_document(document=pdf_cache['fee'], filename="loading_fee_directive.pdf", caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን")
+        if 'loader' in pdf_cache:
+            await update.message.reply_document(document=pdf_cache['loader'], filename="loader_directive.pdf", caption="📄 3. ጫኝና አውራጅ መመሪያ")
         return
 
     elif text == "5/የአገልግሎት ስታንዳርዶች ለማየት":
@@ -133,10 +142,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 **የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች**\n\n"
             "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
         )
-        await update.message.reply_document(
-            document=open('service_standards.pdf', 'rb'), 
-            caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ"
-        )
+        if 'standards' in pdf_cache:
+            await update.message.reply_document(document=pdf_cache['standards'], filename="service_standards.pdf", caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ")
         return
 
     elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
@@ -254,11 +261,15 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        # ዌብሁኩን ያለ አላስፈላጊ ሪ-ኢኒሻላይዜሽን በቀጥታ ማስተኬድ
-        async def process():
-            await application.process_update(update)
+        # ሉፑን ሳይለቁ በአስተማማኝ ሁኔታ ማካሄድ
+        future = asyncio.run_coroutine_threadsafe(
+            application.process_update(update), loop
+        )
+        try:
+            future.result(timeout=10)
+        except Exception as e:
+            logger.error(f"Webhook processing error: {e}")
             
-        asyncio.run(process())
     return 'OK', 200
 
 if __name__ == '__main__':

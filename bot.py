@@ -1,8 +1,9 @@
-mport logging
+import logging
 import os
 import asyncio
+from io import BytesIO
 from flask import Flask, request
-from telegram import Update, ReplyKeyboardMarkup, InputFile
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ሎጊንግ ማዋቀር
@@ -42,7 +43,7 @@ def load_pdfs():
     for key, filename in files.items():
         if os.path.exists(filename):
             with open(filename, 'rb') as f:
-                pdf_cache[key] = f.read()
+                pdf_cache[key] = BytesIO(f.read())
 
 load_pdfs()
 
@@ -129,10 +130,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
         if 'peace' in pdf_cache:
+            pdf_cache['peace'].seek(0)
             await update.message.reply_document(document=pdf_cache['peace'], filename="peace_army_regulation.pdf", caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ")
         if 'fee' in pdf_cache:
+            pdf_cache['fee'].seek(0)
             await update.message.reply_document(document=pdf_cache['fee'], filename="loading_fee_directive.pdf", caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን")
         if 'loader' in pdf_cache:
+            pdf_cache['loader'].seek(0)
             await update.message.reply_document(document=pdf_cache['loader'], filename="loader_directive.pdf", caption="📄 3. ጫኝና አውራጅ መመሪያ")
         return
 
@@ -143,6 +147,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
         )
         if 'standards' in pdf_cache:
+            pdf_cache['standards'].seek(0)
             await update.message.reply_document(document=pdf_cache['standards'], filename="service_standards.pdf", caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ")
         return
 
@@ -261,7 +266,6 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        # ሉፑን ሳይለቁ በአስተማማኝ ሁኔታ ማካሄድ
         future = asyncio.run_coroutine_threadsafe(
             application.process_update(update), loop
         )

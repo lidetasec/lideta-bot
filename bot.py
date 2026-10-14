@@ -52,7 +52,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     state = context.user_data.get('state')
 
-    # ዋና ዋና ሜኑ በተኖች ሲጫኑ (የቀደመ ስቴት በማጽዳት በንጹህ ይጀምራል)
+    # ዋና ዋና ሜኑ በተኖች ሲጫኑ
     if text == "1/መረጃና ጥቆማ ለመስጠት":
         context.user_data.clear()
         context.user_data['state'] = 'TIP_WOREDA'
@@ -102,20 +102,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "እባክዎ ከዚህ በታች የተያያዙትን ሦስቱን ኦፊሴላዊ የፒዲኤፍ መመሪያዎች ማውረድ ይችላሉ፦"
         )
         
-        files_to_send = [
-            ("peace_army_regulation.pdf", "📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"),
-            ("loading_fee_directive.pdf", "📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን"),
-            ("loader_directive.pdf", "📄 3. ጫኝና አውራጅ መመሪያ")
-        ]
-        
-        for file_name, caption in files_to_send:
-            if os.path.exists(file_name):
-                try:
-                    await update.message.reply_document(document=open(file_name, 'rb'), caption=caption)
-                except Exception as e:
-                    logger.error(f"Error sending {file_name}: {e}")
-            else:
-                await update.message.reply_text(f"⚠️ ፋይል አልተገኘም: {file_name}")
+        await update.message.reply_document(
+            document=open('peace_army_regulation.pdf', 'rb'), 
+            caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"
+        )
+        await update.message.reply_document(
+            document=open('loading_fee_directive.pdf', 'rb'), 
+            caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን"
+        )
+        await update.message.reply_document(
+            document=open('loader_directive.pdf', 'rb'), 
+            caption="📄 3. ጫኝና አውራጅ መመሪያ"
+        )
         return
 
     elif text == "5/የአገልግሎት ስታንዳርዶች ለማየት":
@@ -124,18 +122,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 **የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች**\n\n"
             "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
         )
-        std_path = "service_standards.pdf"
-        if os.path.exists(std_path):
-            try:
-                await update.message.reply_document(
-                    document=open(std_path, 'rb'), 
-                    caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ"
-                )
-            except Exception as e:
-                logger.error(f"Standards PDF sending error: {e}")
-                await update.message.reply_text("⚠️ ለጊዜው የስታንዳርድ ፒዲኤፍ ሰነዱን መጫን አልተቻለም።")
-        else:
-            await update.message.reply_text("⚠️ የስታንዳርድ ፒዲኤፍ ፋይል አልተገኘምም።")
+        await update.message.reply_document(
+            document=open('service_standards.pdf', 'rb'), 
+            caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ"
+        )
         return
 
     elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":

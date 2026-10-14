@@ -21,8 +21,19 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ፒዲኤፍ ፋይሎችን አስቀድሞ በሜሞሪ መጫን (ለፈጣን ምላሽ)
-pdf_cache = {}
+# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር (ለተጠቃሚ መረጃ እና ሁኔታዎች እንዳይጠፉ)
+bot_loop = asyncio.new_event_loop()
+
+def start_background_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+import threading
+t = threading.Thread(target=start_background_loop, args=(bot_loop,), daemon=True)
+t.start()
+
+# ፒዲኤፍ ፋይሎችን በሜሞሪ መያዝ
+raw_pdf_bytes = {}
 def load_pdfs():
     files = {
         'peace': 'peace_army_regulation.pdf',
@@ -33,9 +44,16 @@ def load_pdfs():
     for key, filename in files.items():
         if os.path.exists(filename):
             with open(filename, 'rb') as f:
-                pdf_cache[key] = BytesIO(f.read())
+                raw_pdf_bytes[key] = f.read()
 
 load_pdfs()
+
+async def initialize_bot():
+    await application.initialize()
+    await application.start()
+    await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+
+asyncio.run_coroutine_threadsafe(initialize_bot(), bot_loop)
 
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
@@ -119,15 +137,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "እባክዎ ከዚህ በታች የተያያዙትን ሦስቱን ኦፊሴላዊ የፒዲኤፍ መመሪያዎች ማውረድ ይችላሉ፦"
         )
         
-        if 'peace' in pdf_cache:
-            pdf_cache['peace'].seek(0)
-            await update.message.reply_document(document=pdf_cache['peace'], filename="peace_army_regulation.pdf", caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ")
-        if 'fee' in pdf_cache:
-            pdf_cache['fee'].seek(0)
-            await update.message.reply_document(document=pdf_cache['fee'], filename="loading_fee_directive.pdf", caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን")
-        if 'loader' in pdf_cache:
-            pdf_cache['loader'].seek(0)
-            await update.message.reply_document(document=pdf_cache['loader'], filename="loader_directive.pdf", caption="📄 3. ጫኝና አውራጅ መመሪያ")
+        if 'peace' in raw_pdf_bytes:
+            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['peace']), filename="peace_army_regulation.pdf", caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ")
+        if 'fee' in raw_pdf_bytes:
+            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['fee']), filename="loading_fee_directive.pdf", caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን")
+        if 'loader' in raw_pdf_bytes:
+            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['loader']), filename="loader_directive.pdf", caption="📄 3. ጫኝና አውራጅ መመሪያ")
         return
 
     elif text == "5/የአገልግሎት ስታንዳርዶች ለማየት":
@@ -136,9 +151,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📊 **የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች**\n\n"
             "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
         )
-        if 'standards' in pdf_cache:
-            pdf_cache['standards'].seek(0)
-            await update.message.reply_document(document=pdf_cache['standards'], filename="service_standards.pdf", caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ")
+        if 'standards' in raw_pdf_bytes:
+            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['standards']), filename="service_standards.pdf", caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ")
         return
 
     elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
@@ -250,28 +264,16 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_m
 def home():
     return "Lideta Security Bot is live with Webhook!"
 
-is_initialized = False
-
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global is_initialized
     if request.method == 'POST':
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        async def process():
-            global is_initialized
-            if not is_initialized:
-                await application.initialize()
-                await application.start()
-                await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-                is_initialized = True
-            await application.process_update(update)
-            
-        try:
-            asyncio.run(process())
-        except Exception as e:
-            logger.error(f"Webhook processing error: {e}")
+        # ቋሚ በሆነው የጀርባ ኢቨንት ሉፕ እንዲሰራ ማድረግ (State እንዳይጠፋ)
+        asyncio.run_coroutine_threadsafe(
+            application.process_update(update), bot_loop
+        )
             
     return 'OK', 200
 

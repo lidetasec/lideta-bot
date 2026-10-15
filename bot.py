@@ -1,12 +1,15 @@
 import asyncio
+import json
 import logging
 import os
-import sqlite3
 import threading
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
+import gspread
 from flask import Flask, abort, request
+from google.oauth2.service_account import Credentials
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -14,15 +17,17 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 log = logging.getLogger(__name__)
 
 # ============================================================
-#  ማዋቀር (ከRender Environment Variables የሚነበብ)
+#  ማዋቀር (Render Environment Variables)
 # ============================================================
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "bot_data.db"
+CREDS_FILE = BASE_DIR / "credentials.json"  # ኮምፒውተርህ ላይ ለሙከራ
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
 PUBLIC_URL = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "10d8t6dysp3ig-bQ7HFEV-cP1oID-Fw7juVJOYeNVUYM")
+GOOGLE_CREDS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON", "")  # Render ላይ የ credentials.json ይዘት
 
 if not TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN አልተገኘም። Render ላይ Environment Variable ጨምር።")
@@ -30,7 +35,7 @@ if not PUBLIC_URL:
     raise RuntimeError("RENDER_EXTERNAL_URL አልተገኘም። ቦቱ Web Service ሆኖ መሰራቱን አረጋግጥ።")
 
 # ============================================================
-#  ፒዲኤፎች (ፋይሎቹ bot.py ጎን ባለው ፎልደር ውስጥ መሆን አለባቸው)
+#  ፒዲኤፎች (ፋይሎቹ bot.py ጎን መሆን አለባቸው)
 # ============================================================
 PDFS = {
     "peace": ("peace_army_regulation.pdf", "1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"),
@@ -83,9 +88,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 FLOW_KEYBOARD = ReplyKeyboardMarkup([[BTN_HOME]], resize_keyboard=True)
-PHOTO_KEYBOARD = ReplyKeyboardMarkup(
-    [[BTN_PHOTO_YES], [BTN_PHOTO_NO], [BTN_HOME]], resize_keyboard=True
-)
+PHOTO_KEYBOARD = ReplyKeyboardMarkup([[BTN_PHOTO_YES], [BTN_PHOTO_NO], [BTN_HOME]], resize_keyboard=True)
 
 RATING_CHOICES = [("ሀ", "በጣም ከፍተኛ"), ("ለ", "ከፍተኛ"), ("ሐ", "መካከለኛ"), ("መ", "ዝቅተኛ")]
 RATING_MAP = {}
@@ -97,29 +100,50 @@ RATING_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 # ============================================================
-#  ዳታቤዝ (SQLite)
+#  Google Sheets
 # ============================================================
-def execute(sql, params=(), fetch=False):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.execute(sql, params)
-        conn.commit()
-        return cur.fetchall() if fetch else cur.lastrowid
-    finally:
-        conn.close()
+_spreadsheet = None
 
 
-def init_db():
-    execute("""CREATE TABLE IF NOT EXISTS suggestions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT,
-        wereda TEXT, zone TEXT, place TEXT, detail TEXT, photo_file_id TEXT)""")
-    execute("""CREATE TABLE IF NOT EXISTS complaints (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, user_id INTEGER,
-        full_name TEXT, wereda TEXT, zone TEXT, house_no TEXT, detail TEXT,
-        request TEXT, phone TEXT, status TEXT DEFAULT 'አዲስ', reply TEXT)""")
-    execute("""CREATE TABLE IF NOT EXISTS feedback (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, rating TEXT, comment TEXT)""")
+def get_spreadsheet():
+    global _spreadsheet
+    if _spreadsheet is None:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        if GOOGLE_CREDS_JSON:
+            creds = Credentials.from_service_account_info(json.loads(GOOGLE_CREDS_JSON), scopes=scopes)
+        else:
+            creds = Credentials.from_service_account_file(CREDS_FILE, scopes=scopes)
+        _spreadsheet = gspread.authorize(creds).open_by_key(SPREADSHEET_ID)
+    return _spreadsheet
+
+
+def sheet(tab):
+    return get_spreadsheet().worksheet(tab)
+
+
+def add_row(tab, values):
+    """አዲስ ረድፍ ይጨምራል፤ የረድፉን ID ይመልሳል (1 ጀምሮ)።"""
+    ws = sheet(tab)
+    ws.append_row(values, value_input_option="USER_ENTERED")
+    return len(ws.col_values(1)) - 1  # ራስጌውን ሳይጨምር
+
+
+def records(tab):
+    """ሁሉም ረድፎች እንደ ዝርዝር (ID = ቦታ + 1)።"""
+    return sheet(tab).get_all_records()
+
+
+def last_records(tab, n=10):
+    recs = records(tab)
+    pairs = [(i + 1, r) for i, r in enumerate(recs)]
+    return pairs[::-1][:n]
+
+
+def get_record(tab, rid):
+    recs = records(tab)
+    if 1 <= rid <= len(recs):
+        return recs[rid - 1]
+    return None
 
 
 def now():
@@ -163,24 +187,18 @@ def Q(key, prompt, check=any_text, error="እባክዎ እንደገና ይጻፉ
 
 
 # ============================================================
-#  የውይይት ደረጃዎች መጨረሻ
+#  የመጨረሻ ደረጃዎች (መረጃው ወደ Sheets ይገባል)
 # ============================================================
 async def finish_tip(update, context, d):
-    execute(
-        """INSERT INTO suggestions (created, wereda, zone, place, detail, photo_file_id)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (now(), d["wereda"], d["zone"], d["place"], d["details"], d.get("photo") or None),
-    )
+    add_row("suggestions", [now(), d["wereda"], d["zone"], d["place"], d["details"], d.get("photo") or ""])
     await update.message.reply_text("ለሰጡን መረጃና ጥቆማ እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
 
 
 async def finish_complaint(update, context, d):
-    cid = execute(
-        """INSERT INTO complaints (created, user_id, full_name, wereda, zone, house_no,
-           detail, request, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (now(), update.effective_chat.id, d["name"], d["wereda"], d["zone"],
-         d["house"], d["details"], d["request"], d["phone"]),
-    )
+    cid = add_row("complaints", [
+        now(), update.effective_chat.id, d["name"], d["wereda"], d["zone"],
+        d["house"], d["details"], d["request"], d["phone"], "አዲስ", "",
+    ])
     text = (
         f"🆕 አዲስ ቅሬታ #{cid}\n"
         f"ስም: {d['name']}\n"
@@ -202,10 +220,7 @@ async def finish_complaint(update, context, d):
 
 
 async def finish_feedback(update, context, d):
-    execute(
-        "INSERT INTO feedback (created, rating, comment) VALUES (?, ?, ?)",
-        (now(), d["rating"], d["comment"]),
-    )
+    add_row("feedback", [now(), d["rating"], d["comment"]])
     await update.message.reply_text("ስለሰጡን አስተያየት እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
 
 
@@ -243,8 +258,7 @@ FLOWS = {
         "questions": [
             Q("rating", "በጽ/ቤቱ ያገኙትን አገልግሎት እንዴት ይገልጹታል?",
               rating_value, "እባክዎ ከቁልፎቹ አንዱን ይምረጡ።", RATING_KEYBOARD),
-            Q("comment", 'በቀጣይ ሊስተካከል ይገባዋል የሚሉት ካለ እዚህ ይጻፉ።\n(ከሌለ "-" ብለው ይላኩ)',
-              comment_value),
+            Q("comment", 'በቀጣይ ሊስተካከል ይገባዋል የሚሉት ካለ እዚህ ይጻፉ።\n(ከሌለ "-" ብለው ይላኩ)', comment_value),
         ],
         "finish": finish_feedback,
     },
@@ -256,6 +270,17 @@ async def start_flow(update, context, name):
     context.user_data.update({"flow": name, "idx": 0, "data": {}})
     q = FLOWS[name]["questions"][0]
     await update.message.reply_text(q["prompt"], reply_markup=q["markup"] or FLOW_KEYBOARD)
+
+
+async def run_finish(update, context, flow, data):
+    try:
+        await flow["finish"](update, context, data)
+    except Exception:
+        log.exception("መረጃ ወደ Sheets መጻፍ አልተቻለም")
+        await update.message.reply_text(
+            "ይቅርታ፣ መረጃውን አሁን ማስቀመጥ አልተቻለም። እባክዎ ጥቂት ቆይተው እንደገና ይሞክሩ።",
+            reply_markup=MAIN_KEYBOARD,
+        )
 
 
 async def flow_answer(update, context, text):
@@ -282,14 +307,14 @@ async def flow_answer(update, context, text):
 
     data = context.user_data["data"]
     context.user_data.clear()
-    await flow["finish"](update, context, data)
+    await run_finish(update, context, flow, data)
 
 
 async def finish_pending_tip(update, context, photo_id):
     data = context.user_data.get("data", {})
     data["photo"] = photo_id
     context.user_data.clear()
-    await finish_tip(update, context, data)
+    await run_finish(update, context, FLOWS["tip"], data)
 
 
 # ============================================================
@@ -355,14 +380,12 @@ async def on_text(update, context):
 
 async def on_photo(update, context):
     if not context.user_data.get("awaiting_photo"):
-        return await update.message.reply_text(
-            "ፎቶ መላክ የሚቻለው ጥቆማ ሲሰጡ ብቻ ነው።", reply_markup=MAIN_KEYBOARD
-        )
+        return await update.message.reply_text("ፎቶ መላክ የሚቻለው ጥቆማ ሲሰጡ ብቻ ነው።", reply_markup=MAIN_KEYBOARD)
     await finish_pending_tip(update, context, update.message.photo[-1].file_id)
 
 
 # ============================================================
-#  የአስተዳዳሪ ትዕዛዞች
+#  የአስተዳዳሪ ትዕዛዞች (ከSheets ያነባሉ)
 # ============================================================
 async def is_admin(update):
     if update.effective_user.id in ADMIN_IDS:
@@ -388,12 +411,10 @@ async def cmd_admin(update, context):
 async def cmd_complaints(update, context):
     if not await is_admin(update):
         return
-    rows = execute(
-        "SELECT id, full_name, wereda, status FROM complaints ORDER BY id DESC LIMIT 10", fetch=True
-    )
+    rows = last_records("complaints", 10)
     if not rows:
         return await update.message.reply_text("ምንም ቅሬታ የለም።")
-    lines = [f"#{r['id']} | {r['full_name']} | {r['wereda']} | {r['status']}" for r in rows]
+    lines = [f"#{rid} | {r['full_name']} | {r['wereda']} | {r['status']}" for rid, r in rows]
     await update.message.reply_text("\n".join(lines) + "\n\nዝርዝር ለማየት: /complaint ቁጥር")
 
 
@@ -402,12 +423,12 @@ async def cmd_complaint(update, context):
         return
     if not context.args or not context.args[0].isdigit():
         return await update.message.reply_text("አጠቃቀም: /complaint ቁጥር")
-    rows = execute("SELECT * FROM complaints WHERE id = ?", (int(context.args[0]),), fetch=True)
-    if not rows:
+    rid = int(context.args[0])
+    r = get_record("complaints", rid)
+    if not r:
         return await update.message.reply_text("ይህ ቁጥር ያለው ቅሬታ የለም።")
-    r = rows[0]
     await update.message.reply_text(
-        f"ቅሬታ #{r['id']} ({r['created']})\n"
+        f"ቅሬታ #{rid} ({r['created']})\n"
         f"ስም: {r['full_name']}\n"
         f"ወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቤት ቁጥር: {r['house_no']}\n"
         f"ስልክ: {r['phone']}\n"
@@ -423,14 +444,19 @@ async def cmd_reply(update, context):
         return
     if len(context.args) < 2 or not context.args[0].isdigit():
         return await update.message.reply_text("አጠቃቀም: /reply ቁጥር ምላሽዎ")
-    cid = int(context.args[0])
+    rid = int(context.args[0])
     answer = " ".join(context.args[1:])
-    rows = execute("SELECT * FROM complaints WHERE id = ?", (cid,), fetch=True)
-    if not rows:
+    r = get_record("complaints", rid)
+    if not r:
         return await update.message.reply_text("ይህ ቁጥር ያለው ቅሬታ የለም።")
-    execute("UPDATE complaints SET reply = ?, status = 'ምላሽ ተሰጥቷል' WHERE id = ?", (answer, cid))
+
+    # ረድፉ = ID + 1 (ራስጌ ስላለ)። ሁኔታና ምላሹን ይጽፋል።
+    ws = sheet("complaints")
+    ws.update_cell(rid + 1, 10, "ምላሽ ተሰጥቷል")
+    ws.update_cell(rid + 1, 11, answer)
+
     try:
-        await context.bot.send_message(rows[0]["user_id"], f"ለቅሬታ ቁጥር {cid} የተሰጠ ምላሽ፦\n\n{answer}")
+        await context.bot.send_message(int(r["user_id"]), f"ለቅሬታ ቁጥር {rid} የተሰጠ ምላሽ፦\n\n{answer}")
         await update.message.reply_text("ምላሹ ለቅሬታ አቅራቢው ተልኳል ✅")
     except Exception as e:
         log.error("ምላሽ መላክ አልተቻለም: %s", e)
@@ -440,18 +466,18 @@ async def cmd_reply(update, context):
 async def cmd_suggestions(update, context):
     if not await is_admin(update):
         return
-    rows = execute("SELECT * FROM suggestions ORDER BY id DESC LIMIT 10", fetch=True)
+    rows = last_records("suggestions", 10)
     if not rows:
         return await update.message.reply_text("ምንም ጥቆማ የለም።")
-    lines = []
-    for r in rows:
-        photo = "📷 አለ" if r["photo_file_id"] else "የለም"
-        lines.append(
-            f"#{r['id']} ({r['created']})\n"
+    parts = []
+    for rid, r in rows:
+        photo = "📷 አለ" if r.get("photo_file_id") else "የለም"
+        parts.append(
+            f"#{rid} ({r['created']})\n"
             f"ወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቦታ: {r['place']}\n"
             f"{r['detail']}\nፎቶ: {photo}"
         )
-    await update.message.reply_text("\n\n".join(lines)[:4000])
+    await update.message.reply_text("\n\n".join(parts)[:4000])
 
 
 async def cmd_photo(update, context):
@@ -459,22 +485,21 @@ async def cmd_photo(update, context):
         return
     if not context.args or not context.args[0].isdigit():
         return await update.message.reply_text("አጠቃቀም: /photo ቁጥር")
-    rows = execute(
-        "SELECT photo_file_id FROM suggestions WHERE id = ?", (int(context.args[0]),), fetch=True
-    )
-    if not rows or not rows[0]["photo_file_id"]:
+    r = get_record("suggestions", int(context.args[0]))
+    if not r or not r.get("photo_file_id"):
         return await update.message.reply_text("ለዚህ ጥቆማ ፎቶ የለም።")
-    await update.message.reply_photo(rows[0]["photo_file_id"])
+    await update.message.reply_photo(r["photo_file_id"])
 
 
 async def cmd_feedbacks(update, context):
     if not await is_admin(update):
         return
-    rows = execute("SELECT rating, COUNT(*) AS n FROM feedback GROUP BY rating", fetch=True)
-    if not rows:
+    recs = records("feedback")
+    if not recs:
         return await update.message.reply_text("ምንም አስተያየት የለም።")
+    counts = Counter(r["rating"] for r in recs)
     await update.message.reply_text(
-        "የአስተያየቶች ማጠቃለያ፦\n" + "\n".join(f"{r['rating']}: {r['n']}" for r in rows)
+        "የአስተያየቶች ማጠቃለያ፦\n" + "\n".join(f"{k}: {v}" for k, v in counts.items())
     )
 
 
@@ -498,7 +523,7 @@ application.add_handler(MessageHandler(filters.PHOTO, on_photo))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 application.add_error_handler(on_error)
 
-# መልዕክቶች አንድ በአንድ በቅደም ተከተል የሚሰሩበት ቋሚ ሉፕና ወረፋ
+# መልዕክቶች አንድ በአንድ በቅደም ተከተል የሚሰሩበት ወረፋ
 bot_loop = asyncio.new_event_loop()
 update_queue = None
 
@@ -517,6 +542,10 @@ async def update_worker():
 async def bot_startup():
     global update_queue
     update_queue = asyncio.Queue()
+
+    # Sheets ተደራሽ መሆኑን ቀድሞ እናረጋግጣለን
+    await asyncio.to_thread(get_spreadsheet)
+
     await application.initialize()
     await application.start()
     await application.bot.set_webhook(
@@ -552,7 +581,6 @@ def webhook():
 
 
 if __name__ == "__main__":
-    init_db()
     threading.Thread(target=bot_loop.run_forever, daemon=True).start()
-    asyncio.run_coroutine_threadsafe(bot_startup(), bot_loop).result(timeout=60)
+    asyncio.run_coroutine_threadsafe(bot_startup(), bot_loop).result(timeout=90)
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

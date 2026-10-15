@@ -22,7 +22,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር (ለስቴት እና ለተጠቃሚ መረጃዎች ደህንነት)
+# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር (ለአስተማማኝ ስቴት እና ጥያቄ ማስተናገጃ)
 bot_loop = asyncio.new_event_loop()
 
 def start_background_loop(loop):
@@ -48,7 +48,7 @@ def load_pdfs():
 
 load_pdfs()
 
-# ቦቱን አንዴ ብቻ የማዋቀር ሂደት
+# ቦቱን በአስተማማኝ ሁኔታ አንዴ ብቻ የማዋቀር ሂደት
 is_bot_initialized = False
 init_lock = threading.Lock()
 
@@ -283,7 +283,12 @@ def webhook():
             await ensure_bot_initialized()
             await application.process_update(update)
 
-        asyncio.run_coroutine_threadsafe(process_webhook(), bot_loop)
+        # በትክክለኛው የጀርባ ሉፕ ውስጥ ያለ መዘግየት ማስኬድ
+        future = asyncio.run_coroutine_threadsafe(process_webhook(), bot_loop)
+        try:
+            future.result(timeout=25)
+        except Exception as e:
+            logger.error(f"Webhook processing error: {e}", exc_info=True)
             
     return 'OK', 200
 

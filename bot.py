@@ -1,297 +1,490 @@
+import asyncio
 import logging
 import os
-import asyncio
+import sqlite3
 import threading
-from io import BytesIO
-from flask import Flask, request
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from datetime import datetime
+from pathlib import Path
 
-# ሎጊንግ ማዋቀር
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+from flask import Flask, abort, request
+from telegram import ReplyKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+log = logging.getLogger(__name__)
+
+# ============================================================
+#  ማዋቀር (ከRender Environment Variables የሚነበብ)
+# ============================================================
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "bot_data.db"
+
+TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
+PUBLIC_URL = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")  # Render ራሱ ያዘጋጃል
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")               # አማራጭ ግን የሚመከር
+
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN አልተገኘም። Render ላይ Environment Variable ጨምር።")
+if not PUBLIC_URL:
+    raise RuntimeError("RENDER_EXTERNAL_URL አልተገኘም። ቦቱ Web Service ሆኖ መሰራቱን አረጋግጥ።")
+
+# ============================================================
+#  ፒዲኤፎች (ፋይሎቹ bot.py ጎን ባለው ፎልደር ውስጥ መሆን አለባቸው)
+# ============================================================
+PDFS = {
+    "peace": ("peace_army_regulation.pdf", "1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ"),
+    "fee": ("loading_fee_directive.pdf", "2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን"),
+    "loader": ("loader_directive.pdf", "3. ጫኝና አውራጅ መመሪያ"),
+    "standards": ("service_standards.pdf", "4. የአገልግሎት ስታንዳርዶች ሰነድ"),
+}
+
+# ============================================================
+#  ጽሁፎች
+# ============================================================
+WELCOME = (
+    "እንኳን ወደ ልደታ ክ/ከተማ ሰላምና ጸጥታ ጽሕፈት ቤት ቴሌግራም ቦት በሰላም መጡ።\n"
+    "ከታች ያሉትን ቁልፎች በመጠቀም የሚፈልጉትን አገልግሎት ማግኘት ይችላሉ።"
 )
-logger = logging.getLogger(__name__)
 
-# Flask ሰርቨር ማዋቀር
-app = Flask(__name__)
+VISION_FULL = (
+    "🌟 ራዕይ (Vision)\n"
+    "በ2022 አዲስ አበባ ከተማችን በህዝብ ተሳትፎ ሠላምና ፀጥታ የሰፈነባት የህግ የበላይነት የተረጋገጠባት ለኑሮ፣ "
+    "ለስራ እና ለመዝናኛ ተመራጭ የሆነች ከተማ ሆና ማየት፤\n\n"
+    "🎯 ተልዕኮ\n"
+    "የተቀናጀ የጸጥታ ጉዳዮች አስተዳደር እና የግጭት ቅድመ ማስጠንቀቂያና ፈጣን ምላሽ ስርዓትን ተግባራዊ በማድረግ ወንጀልን በመከላከል፤ "
+    "የሰላም እሴቶችን በመገንባት፣ በሃይማኖትና እምነት ተከታዮች መካከል መከባበርና መቻቻል እንዲሰፍን በማድረግ፤ የክትትል፤ "
+    "ቁጥጥር እና ቀልጣፋ አገልግሎት አሰጣጥ ስርዓት በመዘርጋት፣ ነዋሪውንና ባለድርሻ አካላትን ተሳትፎና ባለቤትነት በማረጋገጥ "
+    "ሰላም፣ ጸጥታና ደህንነቷ የተጠበቀ እና ህግና ስርዓት የተከበረባት ከተማ ማድረግ ነው።\n\n"
+    "💎 እሴቶች\n"
+    "• ታማኝነትና ተጠያቂነት\n"
+    "• ሚስጥር ጠባቂነት\n"
+    "• ፍትሐዊነትና ሰብዓዊነት\n"
+    "• ለላቀ ሰላም እና ጸጥታ መትጋት\n"
+    "• ተቋማዊ አጋርነት\n"
+    "• የህግ የበላይነትን ማክበርና ማስከበር"
+)
 
-# ቴሌግራም ቦት ቶከን ከሬንደር ማንበብ
-TOKEN = os.environ.get("TELEGRAM_TOKEN") 
+# ============================================================
+#  ቁልፎች
+# ============================================================
+BTN_TIP = "1/መረጃና ጥቆማ ለመስጠት"
+BTN_VISION = "2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ"
+BTN_COMPLAINT = "3/ቅሬታ ለማቅረብ"
+BTN_GUIDES = "4/መመሪያዎችን ለመመልከት"
+BTN_STANDARDS = "5/የአገልግሎት ስታንዳርዶች ለማየት"
+BTN_FEEDBACK = "6/አገልግሎቶች ላይ አስተያየት ለመስጠት"
+BTN_HOME = "🏠 ዋና ምናሌ"
 
-# ቴሌግራም አፕሊኬሽን ማዋቀር
-application = Application.builder().token(TOKEN).build()
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_GUIDES], [BTN_STANDARDS], [BTN_FEEDBACK], [BTN_HOME]],
+    resize_keyboard=True,
+)
+FLOW_KEYBOARD = ReplyKeyboardMarkup([[BTN_HOME]], resize_keyboard=True)
 
-# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር (ለአስተማማኝ ስቴት እና ጥያቄ ማስተናገጃ)
-bot_loop = asyncio.new_event_loop()
+RATING_CHOICES = [("ሀ", "በጣም ከፍተኛ"), ("ለ", "ከፍተኛ"), ("ሐ", "መካከለኛ"), ("መ", "ዝቅተኛ")]
+RATING_MAP = {}
+for _i, (_letter, _name) in enumerate(RATING_CHOICES, 1):
+    for _key in (f"{_letter}/ {_name}", _letter, _name, str(_i)):
+        RATING_MAP[_key] = _name
+RATING_KEYBOARD = ReplyKeyboardMarkup(
+    [[f"{l}/ {n}"] for l, n in RATING_CHOICES] + [[BTN_HOME]], resize_keyboard=True
+)
 
-def start_background_loop(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
+# ============================================================
+#  ዳታቤዝ (SQLite)
+# ============================================================
+def execute(sql, params=(), fetch=False):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return cur.fetchall() if fetch else cur.lastrowid
+    finally:
+        conn.close()
 
-t = threading.Thread(target=start_background_loop, args=(bot_loop,), daemon=True)
-t.start()
 
-# ፒዲኤፍ ፋይሎችን በሜሞሪ መያዝ
-raw_pdf_bytes = {}
-def load_pdfs():
-    files = {
-        'peace': 'peace_army_regulation.pdf',
-        'fee': 'loading_fee_directive.pdf',
-        'loader': 'loader_directive.pdf',
-        'standards': 'service_standards.pdf'
-    }
-    for key, filename in files.items():
-        if os.path.exists(filename):
-            with open(filename, 'rb') as f:
-                raw_pdf_bytes[key] = f.read()
+def init_db():
+    execute("""CREATE TABLE IF NOT EXISTS suggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT,
+        wereda TEXT, zone TEXT, place TEXT, detail TEXT)""")
+    execute("""CREATE TABLE IF NOT EXISTS complaints (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, user_id INTEGER,
+        full_name TEXT, wereda TEXT, zone TEXT, house_no TEXT, detail TEXT,
+        request TEXT, phone TEXT, status TEXT DEFAULT 'አዲስ', reply TEXT)""")
+    execute("""CREATE TABLE IF NOT EXISTS feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, rating TEXT, comment TEXT)""")
 
-load_pdfs()
 
-# ቦቱን በአስተማማኝ ሁኔታ አንዴ ብቻ የማዋቀር ሂደት
-is_bot_initialized = False
-init_lock = threading.Lock()
+def now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
 
-async def ensure_bot_initialized():
-    global is_bot_initialized
-    if not is_bot_initialized:
-        with init_lock:
-            if not is_bot_initialized:
-                if not application.running:
-                    await application.initialize()
-                    await application.start()
-                await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-                is_bot_initialized = True
-                logger.info("Bot successfully initialized and Webhook set!")
 
-# ==========================================
-# 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
-# ==========================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    
-    keyboard = [
-        ["1/መረጃና ጥቆማ ለመስጠት"],
-        ["2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ"],
-        ["3/ቅሬታ ለማቅረብ"],
-        ["4/መመሪያዎችን ለመመልከት"],
-        ["5/የአገልግሎት ስታንዳርዶች ለማየት"],
-        ["6/አገልግሎቶች ላይ አስተያየት ለመስጠት"]
-    ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+# ============================================================
+#  ማረጋገጫ ተግባራት
+# ============================================================
+def any_text(t):
+    return t if t else None
 
-    welcome_text = (
-        "እንኳን ወደ ልደታ ክ/ከተማ ሰላምና ጸጥታ ጽሕፈት ቤት ቴሌግራም ቦት በሰላም መጡ። "
-        "ከታች ያሉትን ቁልፎች በመጠቀም የሚፈልጉትን አገልግሎት ማግኘት ይችላሉ።"
+
+def digits_only(t):
+    return t if t.isdigit() else None
+
+
+def phone_only(t):
+    p = t.replace("+", "").replace(" ", "")
+    return p if p.isdigit() and len(p) >= 9 else None
+
+
+def rating_value(t):
+    return RATING_MAP.get(t)
+
+
+def comment_value(t):
+    return "" if t == "-" else t
+
+
+def Q(key, prompt, check=any_text, error="እባክዎ እንደገና ይጻፉ።", markup=None):
+    return {"key": key, "prompt": prompt, "check": check, "error": error, "markup": markup}
+
+
+# ============================================================
+#  የውይይት ደረጃዎች (flow) - ጥያቄዎቹ በቅደም ተከተል ይጠየቃሉ
+# ============================================================
+async def finish_tip(update, context, d):
+    execute(
+        "INSERT INTO suggestions (created, wereda, zone, place, detail) VALUES (?, ?, ?, ?, ?)",
+        (now(), d["wereda"], d["zone"], d["place"], d["details"]),
     )
-    
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    await update.message.reply_text("ለሰጡን መረጃና ጥቆማ እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
 
-application.add_handler(CommandHandler("start", start))
 
-# ==========================================
-# 2. መልዕክቶችን እና የደረጃ በደረጃ ሂደቶችን ማስተዳደር
-# ==========================================
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    state = context.user_data.get('state')
-
-    # ዋና ዋና ሜኑ በተኖች ሲጫኑ
-    if text == "1/መረጃና ጥቆማ ለመስጠት":
-        context.user_data.clear()
-        context.user_data['state'] = 'TIP_WOREDA'
-        context.user_data['tip_data'] = {}
-        await update.message.reply_text(
-            "📍 **መረጃና ጥቆማ ለመስጠት**\n\n"
-            "እባክዎ መረጃውን የሚሰጡበትን **ወረዳ** ይምረጡ/ይጻፉ (በቁጥር ወይም በጽሁፍ)፦"
-        )
-        return
-
-    elif text == "2/ስለ ፅ/ቤቱ ራዕይ ፤ተልዕኮ እና እሴቶች ለማወቅ":
-        context.user_data.clear()
-        vision_mission_text = (
-            "🌟 **ራዕይ (Vision)**\n"
-            "በ2022 አዲስ አበባ ከተማችን በህዝብ ተሳትፎ ሠላምና ፀጥታ የሰፈነባት የህግ የበላይነት የተረጋገጠባት ለኑሮ፣ "
-            "ለስራ እና ለመዝናኛ ተመራጭ የሆነች ከተማ ሆና ማየት፤\n\n"
-            "🎯 **ተልዕኮ**\n"
-            "የተቀናጀ የጸጥታ ጉዳዮች አስተዳደር እና የግጭት ቅድመ ማስጠንቀቂያና ፈጣን ምላሽ ስርዓትን ተግባራዊ በማድረግ ወንጀልን በመከላከል፤ "
-            "የሰላም እሴቶችን በመገንባት፣ በሃይማኖትና እምነት ተከታዮች መካከል መከባበርና መቻቻል እንዲሰፍን በማድረግ፤ የክትትል፤ "
-            "ቁጥጥር እና ቀልጣፋ አገልግሎት አሰጣጥ ስርዓት በመዘርጋት፣ ነዋሪውንና ባለድርሻ አካላትን ተሳትፎና ባለቤትነት በማረጋገጥ "
-            "ሰላም፣ ጸጥታና ደህንነቷ የተጠበቀ እና ህግና ስርዓት የተከበረባት ከተማ ማድረግ ነው፡፡\n\n"
-            "💎 **እሴቶች**\n"
-            "• ታማኝነትና ተጠያቂነት\n"
-            "• ሚስጥር ጠባቂነት\n"
-            "• ፍትሐዊነትና ሰብዓዊነት\n"
-            "• ለላቀ ሰላም እና ጸጥታ መትጋት\n"
-            "• ተቋማዊ አጋርነት\n"
-            "• የህግ የበላይነትን ማክበርና ማስከበር"
-        )
-        await update.message.reply_text(vision_mission_text)
-        return
-
-    elif text == "3/ቅሬታ ለማቅረብ":
-        context.user_data.clear()
-        context.user_data['state'] = 'COMPLAINT_NAME'
-        context.user_data['complaint_data'] = {}
-        await update.message.reply_text(
-            "📝 **ቅሬታ ለማቅረብ**\n\n"
-            "እባክዎ **ሙሉ ስምዎን** ያስገቡ፦"
-        )
-        return
-
-    elif text == "4/መመሪያዎችን ለመመልከት":
-        context.user_data.clear()
-        await update.message.reply_text(
-            "📂 **የጽ/ቤቱ መመሪያዎች እና ደንቦች**\n\n"
-            "እባክዎ ከዚህ በታች የተያያዙትን ሦስቱን ኦፊሴላዊ የፒዲኤፍ መመሪያዎች ማውረድ ይችላሉ፦"
-        )
-        
-        if 'peace' in raw_pdf_bytes:
-            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['peace']), filename="peace_army_regulation.pdf", caption="📄 1. የሰላም ሰራዊት አደረጃጀት፣ አሰራር እና ተግባርና ኃላፊነት ደንብ")
-        if 'fee' in raw_pdf_bytes:
-            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['fee']), filename="loading_fee_directive.pdf", caption="📄 2. የመጫንና ማውረድ አገልግሎት ክፍያ ተመን")
-        if 'loader' in raw_pdf_bytes:
-            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['loader']), filename="loader_directive.pdf", caption="📄 3. ጫኝና አውራጅ መመሪያ")
-        return
-
-    elif text == "5/የአገልግሎት ስታንዳርዶች ለማየት":
-        context.user_data.clear()
-        await update.message.reply_text(
-            "📊 **የልደታ ክ/ከተማ ሰላምና ጸጥታ ጽ/ቤት የአገልግሎት ስታንዳርዶች**\n\n"
-            "እባክዎ የተሟላውን የስታንዳርድ ፒዲኤፍ ሰነድ ከዚህ በታች ያውርዱ፦"
-        )
-        if 'standards' in raw_pdf_bytes:
-            await update.message.reply_document(document=BytesIO(raw_pdf_bytes['standards']), filename="service_standards.pdf", caption="📊 የአገልግሎት ስታንዳርዶች ሰነድ")
-        return
-
-    elif text == "6/አገልግሎቶች ላይ አስተያየት ለመስጠት":
-        context.user_data.clear()
-        context.user_data['state'] = 'FEEDBACK_RATING'
-        context.user_data['feedback_data'] = {}
-        await update.message.reply_text(
-            "⭐ **አገልግሎቶች ላይ አስተያየት ለመስጠት**\n\n"
-            "በጽ/ቤቱ ያገኙትን አገልግሎት እንዴት ይገልጹታል? (ለምሳሌ፦ ‹ሀ› ወይም ‹በጣም ከፍተኛ› ብለው መጻፍ ይችላሉ)\n\n"
-            "ሀ) በጣም ከፍተኛ\n"
-            "ለ) ከፍተኛ\n"
-            "ሐ) መካከለኛ\n"
-            "መ) ዝቅተኛ"
-        )
-        return
-
-    # ==========================================
-    # 3. የጥቆማ (Tip) የደረጃ በደረጃ አሰጣጥ ሂደት
-    # ==========================================
-    if state == 'TIP_WOREDA':
-        context.user_data['tip_data']['woreda'] = text
-        context.user_data['state'] = 'TIP_LOCATION'
-        await update.message.reply_text("መረጃውን የሚሰጡበትን **ቀጠና እና ልዩ ቦታ** ይግለጹ (በቁጥር፣ በጽሁፍ ወይም በሁለቱም)፦")
-        return
-
-    elif state == 'TIP_LOCATION':
-        context.user_data['tip_data']['location'] = text
-        context.user_data['state'] = 'TIP_DETAILS'
-        await update.message.reply_text("የጥቆማውን **ዝርዝር ሁኔታ** ይግለጹልን፦")
-        return
-
-    elif state == 'TIP_DETAILS':
-        context.user_data['tip_data']['details'] = text
-        context.user_data.clear()
-        await update.message.reply_text("ለሰጡን መረጃና ጥቆማ እናመሰግናለን!")
-        return
-
-    # ==========================================
-    # 4. የቅሬታ (Complaint) የደረጃ በደረጃ አሰጣጥ ሂደት
-    # ==========================================
-    elif state == 'COMPLAINT_NAME':
-        context.user_data['complaint_data']['name'] = text
-        context.user_data['state'] = 'COMPLAINT_WOREDA'
-        await update.message.reply_text("እባክዎ **ወረዳ** ያስገቡ (በቁጥር ወይም በጽሁፍ)፦")
-        return
-
-    elif state == 'COMPLAINT_WOREDA':
-        context.user_data['complaint_data']['woreda'] = text
-        context.user_data['state'] = 'COMPLAINT_ZONE'
-        await update.message.reply_text("እባክዎ **ቀጠና** ያስገቡ (በቁጥር ወይም በጽሁፍ)፦")
-        return
-
-    elif state == 'COMPLAINT_ZONE':
-        context.user_data['complaint_data']['zone'] = text
-        context.user_data['state'] = 'COMPLAINT_HOUSE'
-        await update.message.reply_text("እባክዎ **የቤት ቁጥር** ያስገቡ (በቁጥር ብቻ)፦")
-        return
-
-    elif state == 'COMPLAINT_HOUSE':
-        context.user_data['complaint_data']['house'] = text
-        context.user_data['state'] = 'COMPLAINT_DETAILS'
-        await update.message.reply_text("ቅሬታ የሚያቀርቡበትን **ዝርዝር ሁኔታ** ይግለጹ፦")
-        return
-
-    elif state == 'COMPLAINT_DETAILS':
-        context.user_data['complaint_data']['details'] = text
-        context.user_data['state'] = 'COMPLAINT_HELP'
-        await update.message.reply_text("ጽ/ቤቱ እንዲያደርግሎት የሚፈልጉትን **እገዛ/መፍትሄ** ይግለጹ፦")
-        return
-
-    elif state == 'COMPLAINT_HELP':
-        context.user_data['complaint_data']['help'] = text
-        context.user_data['state'] = 'COMPLAINT_PHONE'
-        await update.message.reply_text("ለቅሬታው ምላሽ እንድንሰጥዎ **ስልክ ቁጥርዎን** እዚህ ይጻፉ (በቁጥር ብቻ)፦")
-        return
-
-    elif state == 'COMPLAINT_PHONE':
-        context.user_data['complaint_data']['phone'] = text
-        context.user_data.clear()
-        await update.message.reply_text("ቅሬታዎ ደርሶናል በአጭር ግዜ ውስጥ ምላሽ እንሰጣለን")
-        return
-
-    # ==========================================
-    # 5. የአስተያየት (Feedback) ሂደት
-    # ==========================================
-    elif state == 'FEEDBACK_RATING':
-        context.user_data['feedback_data']['rating'] = text
-        context.user_data['state'] = 'FEEDBACK_COMMENT'
-        await update.message.reply_text("በቀጣይ ሊስተካከል ይገባዋል የሚሉት ካለ እዚህ ይጻፉልን፦")
-        return
-
-    elif state == 'FEEDBACK_COMMENT':
-        context.user_data['feedback_data']['comment'] = text
-        context.user_data.clear()
-        await update.message.reply_text("አስተያየትዎን ስለሰጡን እናመሰግናለን!")
-        return
-
-    else:
-        await update.message.reply_text(
-            "እባክዎ ከታች ካሉት ቁልፎች (Buttons) አንዱን በመምረጥ አገልግሎቱን ይጠቀሙ።"
-        )
-
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# ==========================================
-# 3. የ Flask እና Webhook ማዋቀሪያ ክፍሎች
-# ==========================================
-@app.route('/')
-def home():
-    return "Lideta Security Bot is live with Webhook!"
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    if request.method == 'POST':
-        json_data = request.get_json()
-        update = Update.de_json(json_data, application.bot)
-        
-        async def process_webhook():
-            await ensure_bot_initialized()
-            await application.process_update(update)
-
-        # በትክክለኛው የጀርባ ሉፕ ውስጥ ያለ መዘግየት ማስኬድ
-        future = asyncio.run_coroutine_threadsafe(process_webhook(), bot_loop)
+async def finish_complaint(update, context, d):
+    cid = execute(
+        """INSERT INTO complaints (created, user_id, full_name, wereda, zone, house_no,
+           detail, request, phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (now(), update.effective_chat.id, d["name"], d["wereda"], d["zone"],
+         d["house"], d["details"], d["request"], d["phone"]),
+    )
+    text = (
+        f"🆕 አዲስ ቅሬታ #{cid}\n"
+        f"ስም: {d['name']}\n"
+        f"ወረዳ: {d['wereda']} | ቀጠና: {d['zone']} | ቤት ቁጥር: {d['house']}\n"
+        f"ዝርዝር: {d['details']}\n"
+        f"የሚጠይቁት: {d['request']}\n"
+        f"ስልክ: {d['phone']}\n\n"
+        f"ምላሽ ለመስጠት: /reply {cid} ምላሽዎ"
+    )
+    for aid in ADMIN_IDS:
         try:
-            future.result(timeout=25)
+            await context.bot.send_message(aid, text)
         except Exception as e:
-            logger.error(f"Webhook processing error: {e}", exc_info=True)
-            
-    return 'OK', 200
+            log.warning("ለአስተዳዳሪ %s መላክ አልተቻለም: %s", aid, e)
+    await update.message.reply_text(
+        f"ቅሬታዎ ደርሶናል። የቅሬታ ቁጥርዎ፦ {cid}\nበአጭር ጊዜ ውስጥ ምላሽ እንሰጥዎታለን።",
+        reply_markup=MAIN_KEYBOARD,
+    )
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+
+async def finish_feedback(update, context, d):
+    execute(
+        "INSERT INTO feedback (created, rating, comment) VALUES (?, ?, ?)",
+        (now(), d["rating"], d["comment"]),
+    )
+    await update.message.reply_text("ስለሰጡን አስተያየት እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
+
+
+FLOWS = {
+    "tip": {
+        "questions": [
+            Q("wereda", "መረጃውን የሚሰጡበትን ወረዳ ይጻፉ (በቁጥርም ሆነ በፅሁፍ)።"),
+            Q("zone", "ቀጠናውን ይግለጹ (በቁጥርም ሆነ በፅሁፍ)።"),
+            Q("place", "ልዩ ቦታውን ይግለጹ።"),
+            Q("details", "የጥቆማውን ዝርዝር ሁኔታ ይግለጹ።"),
+        ],
+        "finish": finish_tip,
+    },
+    "complaint": {
+        "questions": [
+            Q("name", "ሙሉ ስምዎን ያስገቡ።"),
+            Q("wereda", "ወረዳዎን ይጻፉ (በቁጥርም ሆነ በፅሁፍ)።"),
+            Q("zone", "ቀጠናዎን ይጻፉ (በቁጥርም ሆነ በፅሁፍ)።"),
+            Q("house", "የቤት ቁጥርዎን በቁጥር ብቻ ይጻፉ።", digits_only, "እባክዎ የቤት ቁጥርን በቁጥር ብቻ ይጻፉ።"),
+            Q("details", "ቅሬታዎን በዝርዝር ይግለጹ።"),
+            Q("request", "ጽ/ቤቱ እንዲያደርግልዎ የሚፈልጉትን ይግለጹ።"),
+            Q("phone", "ለምላሽ እንድንደውልልዎ ስልክ ቁጥርዎን በቁጥር ብቻ ይጻፉ።",
+              phone_only, "እባክዎ ትክክለኛ ስልክ ቁጥር በቁጥር ብቻ ይጻፉ።"),
+        ],
+        "finish": finish_complaint,
+    },
+    "feedback": {
+        "questions": [
+            Q("rating", "በጽ/ቤቱ ያገኙትን አገልግሎት እንዴት ይገልጹታል?",
+              rating_value, "እባክዎ ከቁልፎቹ አንዱን ይምረጡ።", RATING_KEYBOARD),
+            Q("comment", 'በቀጣይ ሊስተካከል ይገባዋል የሚሉት ካለ እዚህ ይጻፉ።\n(ከሌለ "-" ብለው ይላኩ)',
+              comment_value),
+        ],
+        "finish": finish_feedback,
+    },
+}
+
+
+async def start_flow(update, context, name):
+    context.user_data.clear()
+    context.user_data.update({"flow": name, "idx": 0, "data": {}})
+    q = FLOWS[name]["questions"][0]
+    await update.message.reply_text(q["prompt"], reply_markup=q["markup"] or FLOW_KEYBOARD)
+
+
+async def flow_answer(update, context, text):
+    flow = FLOWS[context.user_data["flow"]]
+    idx = context.user_data["idx"]
+    q = flow["questions"][idx]
+
+    value = q["check"](text)
+    if value is None:
+        return await update.message.reply_text(q["error"], reply_markup=q["markup"] or FLOW_KEYBOARD)
+
+    context.user_data["data"][q["key"]] = value
+    idx += 1
+
+    if idx < len(flow["questions"]):
+        context.user_data["idx"] = idx
+        nxt = flow["questions"][idx]
+        return await update.message.reply_text(nxt["prompt"], reply_markup=nxt["markup"] or FLOW_KEYBOARD)
+
+    data = context.user_data["data"]
+    context.user_data.clear()
+    await flow["finish"](update, context, data)
+
+
+# ============================================================
+#  ዋና ምናሌ እና ቁልፎች
+# ============================================================
+async def show_home(update, context):
+    context.user_data.clear()
+    await update.message.reply_text(WELCOME, reply_markup=MAIN_KEYBOARD)
+
+
+async def send_pdf(update, key):
+    fname, title = PDFS[key]
+    path = BASE_DIR / fname
+    if not path.exists():
+        return await update.message.reply_text(
+            f"ይቅርታ፣ '{title}' ፋይሉ ገና አልተጫነም። እባክዎ ለአስተዳዳሪው ያሳውቁ።",
+            reply_markup=MAIN_KEYBOARD,
+        )
+    with path.open("rb") as f:
+        await update.message.reply_document(document=f, filename=fname, caption=title)
+
+
+async def on_text(update, context):
+    text = update.message.text.strip()
+
+    if text == BTN_HOME:
+        return await show_home(update, context)
+    if text == BTN_TIP:
+        return await start_flow(update, context, "tip")
+    if text == BTN_COMPLAINT:
+        return await start_flow(update, context, "complaint")
+    if text == BTN_FEEDBACK:
+        return await start_flow(update, context, "feedback")
+
+    # ቀጥታ ምላሽ የሚሰጡ ቁልፎች - የቀድሞው ውይይት ካለ ያጠፋሉ
+    if text == BTN_VISION:
+        context.user_data.clear()
+        return await update.message.reply_text(VISION_FULL, reply_markup=MAIN_KEYBOARD)
+    if text == BTN_GUIDES:
+        context.user_data.clear()
+        for key in ("peace", "fee", "loader"):
+            await send_pdf(update, key)
+        return await update.message.reply_text("ከላይ ያሉትን መመሪያዎች አውርደው ማየት ይችላሉ።", reply_markup=MAIN_KEYBOARD)
+    if text == BTN_STANDARDS:
+        context.user_data.clear()
+        return await send_pdf(update, "standards")
+
+    # በውይይት ውስጥ ከሆነ መልሱን ያስቀምጣል
+    if "flow" in context.user_data:
+        return await flow_answer(update, context, text)
+
+    await update.message.reply_text("እባክዎ ከታች ካሉት ቁልፎች አንዱን ይምረጡ።", reply_markup=MAIN_KEYBOARD)
+
+
+# ============================================================
+#  የአስተዳዳሪ ትዕዛዞች
+# ============================================================
+async def is_admin(update):
+    if update.effective_user.id in ADMIN_IDS:
+        return True
+    await update.message.reply_text("ይህ ትዕዛዝ ለአስተዳዳሪዎች ብቻ ነው።")
+    return False
+
+
+async def cmd_admin(update, context):
+    if not await is_admin(update):
+        return
+    await update.message.reply_text(
+        "የአስተዳዳሪ ትዕዛዞች፦\n"
+        "/complaints - የቅሬታዎች ዝርዝር (የመጨረሻዎቹ 10)\n"
+        "/complaint ቁጥር - የአንድ ቅሬታ ዝርዝር\n"
+        "/reply ቁጥር ምላሽ - ለቅሬታ ምላሽ መስጠት\n"
+        "/suggestions - የጥቆማዎች ዝርዝር (የመጨረሻዎቹ 10)\n"
+        "/feedbacks - የአስተያየቶች ማጠቃለያ"
+    )
+
+
+async def cmd_complaints(update, context):
+    if not await is_admin(update):
+        return
+    rows = execute(
+        "SELECT id, full_name, wereda, status FROM complaints ORDER BY id DESC LIMIT 10", fetch=True
+    )
+    if not rows:
+        return await update.message.reply_text("ምንም ቅሬታ የለም።")
+    lines = [f"#{r['id']} | {r['full_name']} | {r['wereda']} | {r['status']}" for r in rows]
+    await update.message.reply_text("\n".join(lines) + "\n\nዝርዝር ለማየት: /complaint ቁጥር")
+
+
+async def cmd_complaint(update, context):
+    if not await is_admin(update):
+        return
+    if not context.args or not context.args[0].isdigit():
+        return await update.message.reply_text("አጠቃቀም: /complaint ቁጥር")
+    rows = execute("SELECT * FROM complaints WHERE id = ?", (int(context.args[0]),), fetch=True)
+    if not rows:
+        return await update.message.reply_text("ይህ ቁጥር ያለው ቅሬታ የለም።")
+    r = rows[0]
+    await update.message.reply_text(
+        f"ቅሬታ #{r['id']} ({r['created']})\n"
+        f"ስም: {r['full_name']}\n"
+        f"ወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቤት ቁጥር: {r['house_no']}\n"
+        f"ስልክ: {r['phone']}\n"
+        f"ዝርዝር: {r['detail']}\n"
+        f"የሚጠይቁት: {r['request']}\n"
+        f"ሁኔታ: {r['status']}\n"
+        f"ምላሽ: {r['reply'] or '—'}"
+    )
+
+
+async def cmd_reply(update, context):
+    if not await is_admin(update):
+        return
+    if len(context.args) < 2 or not context.args[0].isdigit():
+        return await update.message.reply_text("አጠቃቀም: /reply ቁጥር ምላሽዎ")
+    cid = int(context.args[0])
+    answer = " ".join(context.args[1:])
+    rows = execute("SELECT * FROM complaints WHERE id = ?", (cid,), fetch=True)
+    if not rows:
+        return await update.message.reply_text("ይህ ቁጥር ያለው ቅሬታ የለም።")
+    execute("UPDATE complaints SET reply = ?, status = 'ምላሽ ተሰጥቷል' WHERE id = ?", (answer, cid))
+    try:
+        await context.bot.send_message(rows[0]["user_id"], f"ለቅሬታ ቁጥር {cid} የተሰጠ ምላሽ፦\n\n{answer}")
+        await update.message.reply_text("ምላሹ ለቅሬታ አቅራቢው ተልኳል ✅")
+    except Exception as e:
+        log.error("ምላሽ መላክ አልተቻለም: %s", e)
+        await update.message.reply_text("ምላሹ ተመዝግቧል፤ ግን ለተጠቃሚው መላክ አልተቻለም።")
+
+
+async def cmd_suggestions(update, context):
+    if not await is_admin(update):
+        return
+    rows = execute("SELECT * FROM suggestions ORDER BY id DESC LIMIT 10", fetch=True)
+    if not rows:
+        return await update.message.reply_text("ምንም ጥቆማ የለም።")
+    text = "\n\n".join(
+        f"#{r['id']} ({r['created']})\nወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቦታ: {r['place']}\n{r['detail']}"
+        for r in rows
+    )
+    await update.message.reply_text(text[:4000])
+
+
+async def cmd_feedbacks(update, context):
+    if not await is_admin(update):
+        return
+    rows = execute("SELECT rating, COUNT(*) AS n FROM feedback GROUP BY rating", fetch=True)
+    if not rows:
+        return await update.message.reply_text("ምንም አስተያየት የለም።")
+    await update.message.reply_text(
+        "የአስተያየቶች ማጠቃለያ፦\n" + "\n".join(f"{r['rating']}: {r['n']}" for r in rows)
+    )
+
+
+async def on_error(update, context):
+    log.error("ስህተት ተፈጥሯል: %s", context.error, exc_info=context.error)
+
+
+# ============================================================
+#  ቴሌግራም አፕሊኬሽን
+# ============================================================
+application = Application.builder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", show_home))
+application.add_handler(CommandHandler("admin", cmd_admin))
+application.add_handler(CommandHandler("complaints", cmd_complaints))
+application.add_handler(CommandHandler("complaint", cmd_complaint))
+application.add_handler(CommandHandler("reply", cmd_reply))
+application.add_handler(CommandHandler("suggestions", cmd_suggestions))
+application.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+application.add_error_handler(on_error)
+
+# መልዕክቶች አንድ በአንድ በቅደም ተከተል የሚሰሩበት ቋሚ ሉፕና ወረፋ
+bot_loop = asyncio.new_event_loop()
+update_queue = None
+
+
+async def update_worker():
+    while True:
+        update = await update_queue.get()
+        try:
+            await application.process_update(update)
+        except Exception:
+            log.exception("መልዕክት ማስኬድ አልተቻለም")
+        finally:
+            update_queue.task_done()
+
+
+async def bot_startup():
+    global update_queue
+    update_queue = asyncio.Queue()
+    await application.initialize()
+    await application.start()
+    # webhook ወዲያውኑ ይዘጋጃል፤ ቴሌግራም መልዕክት መላክ የሚጀምረው በዚህ ምክንያት ነው
+    await application.bot.set_webhook(
+        url=f"{PUBLIC_URL}/webhook",
+        secret_token=WEBHOOK_SECRET or None,
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
+    asyncio.create_task(update_worker())
+    log.info("Webhook ተዘጋጅቷል: %s/webhook", PUBLIC_URL)
+
+
+# ============================================================
+#  Flask (Render ጤናማ መሆኑን እንዲያውቅና webhook እንዲቀበል)
+# ============================================================
+flask_app = Flask(__name__)
+
+
+@flask_app.route("/")
+def home():
+    return "Peace office bot is running"
+
+
+@flask_app.route("/webhook", methods=["POST"])
+def webhook():
+    if WEBHOOK_SECRET and request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+        abort(403)
+    data = request.get_json(silent=True)
+    if data:
+        update = Update.de_json(data, application.bot)
+        # ወዲያውኑ ወረፋ ውስጥ ይገባል፤ ቴሌግራም በፍጥነት ምላሽ ያገኛል
+        asyncio.run_coroutine_threadsafe(update_queue.put(update), bot_loop)
+    return "OK", 200
+
+
+if __name__ == "__main__":
+    init_db()
+    threading.Thread(target=bot_loop.run_forever, daemon=True).start()
+    asyncio.run_coroutine_threadsafe(bot_startup(), bot_loop).result(timeout=60)
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

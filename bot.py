@@ -1,6 +1,7 @@
 import logging
 import os
 import asyncio
+import threading
 from io import BytesIO
 from flask import Flask, request
 from telegram import Update, ReplyKeyboardMarkup
@@ -21,6 +22,16 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
+# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር
+bot_loop = asyncio.new_event_loop()
+
+def start_background_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+t = threading.Thread(target=start_background_loop, args=(bot_loop,), daemon=True)
+t.start()
+
 # ፒዲኤፍ ፋይሎችን በሜሞሪ መያዝ
 raw_pdf_bytes = {}
 def load_pdfs():
@@ -36,6 +47,19 @@ def load_pdfs():
                 raw_pdf_bytes[key] = f.read()
 
 load_pdfs()
+
+# ቦቱን አፕሊኬሽን አንዴ ብቻ ማስጀመር
+is_bot_initialized = False
+
+async def initialize_bot_once():
+    global is_bot_initialized
+    if not is_bot_initialized:
+        await application.initialize()
+        await application.start()
+        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+        is_bot_initialized = True
+
+asyncio.run_coroutine_threadsafe(initialize_bot_once(), bot_loop)
 
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
@@ -252,15 +276,10 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        # ጥያቄው ሲመጣ በቀጥታ እና በአስተማማኝ ሁኔታ ማስተናገድ
-        async def run_async():
-            await application.initialize()
-            await application.process_update(update)
-
-        try:
-            asyncio.run(run_async())
-        except Exception as e:
-            logger.error(f"Webhook processing error: {e}")
+        # ዌብሁኩ ሲመጣ አፕሊኬሽኑን እንደገና ሳይከፍት በቀጥታ ሂደቱን በጀርባ ሉፕ ማስተናገድ
+        asyncio.run_coroutine_threadsafe(
+            application.process_update(update), bot_loop
+        )
             
     return 'OK', 200
 

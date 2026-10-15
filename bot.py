@@ -21,17 +21,6 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር
-bot_loop = asyncio.new_event_loop()
-
-def start_background_loop(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-import threading
-t = threading.Thread(target=start_background_loop, args=(bot_loop,), daemon=True)
-t.start()
-
 # ፒዲኤፍ ፋይሎችን በሜሞሪ መያዝ
 raw_pdf_bytes = {}
 def load_pdfs():
@@ -47,15 +36,6 @@ def load_pdfs():
                 raw_pdf_bytes[key] = f.read()
 
 load_pdfs()
-
-# ቦቱን አስቀድሞ ማዋቀር እና ማስጀመር
-async def initialize_bot():
-    if not application.running:
-        await application.initialize()
-        await application.start()
-        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-
-asyncio.run_coroutine_threadsafe(initialize_bot(), bot_loop)
 
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
@@ -272,14 +252,13 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        async def process():
-            if not application.running:
-                await initialize_bot()
+        # ጥያቄው ሲመጣ በቀጥታ እና በአስተማማኝ ሁኔታ ማስተናገድ
+        async def run_async():
+            await application.initialize()
             await application.process_update(update)
 
-        future = asyncio.run_coroutine_threadsafe(process(), bot_loop)
         try:
-            future.result(timeout=15) # ሂደቱ እስኪጠናቀቅ በትዕግስት መጠበቅ
+            asyncio.run(run_async())
         except Exception as e:
             logger.error(f"Webhook processing error: {e}")
             

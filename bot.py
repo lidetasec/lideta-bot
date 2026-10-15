@@ -21,8 +21,8 @@ DB_PATH = BASE_DIR / "bot_data.db"
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ADMIN_IDS = {int(x) for x in os.environ.get("ADMIN_IDS", "").split(",") if x.strip().isdigit()}
-PUBLIC_URL = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")  # Render ራሱ ያዘጋጃል
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")               # አማራጭ ግን የሚመከር
+PUBLIC_URL = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 
 if not TOKEN:
     raise RuntimeError("TELEGRAM_TOKEN አልተገኘም። Render ላይ Environment Variable ጨምር።")
@@ -74,13 +74,18 @@ BTN_COMPLAINT = "3/ቅሬታ ለማቅረብ"
 BTN_GUIDES = "4/መመሪያዎችን ለመመልከት"
 BTN_STANDARDS = "5/የአገልግሎት ስታንዳርዶች ለማየት"
 BTN_FEEDBACK = "6/አገልግሎቶች ላይ አስተያየት ለመስጠት"
-BTN_HOME = "🏠 ዋና ምናሌ"
+BTN_HOME = "🏠 ዋና ማውጫ"
+BTN_PHOTO_YES = "📷 ፎቶ አለኝ"
+BTN_PHOTO_NO = "❌ ፎቶ የለኝም"
 
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_GUIDES], [BTN_STANDARDS], [BTN_FEEDBACK], [BTN_HOME]],
     resize_keyboard=True,
 )
 FLOW_KEYBOARD = ReplyKeyboardMarkup([[BTN_HOME]], resize_keyboard=True)
+PHOTO_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_PHOTO_YES], [BTN_PHOTO_NO], [BTN_HOME]], resize_keyboard=True
+)
 
 RATING_CHOICES = [("ሀ", "በጣም ከፍተኛ"), ("ለ", "ከፍተኛ"), ("ሐ", "መካከለኛ"), ("መ", "ዝቅተኛ")]
 RATING_MAP = {}
@@ -108,7 +113,7 @@ def execute(sql, params=(), fetch=False):
 def init_db():
     execute("""CREATE TABLE IF NOT EXISTS suggestions (
         id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT,
-        wereda TEXT, zone TEXT, place TEXT, detail TEXT)""")
+        wereda TEXT, zone TEXT, place TEXT, detail TEXT, photo_file_id TEXT)""")
     execute("""CREATE TABLE IF NOT EXISTS complaints (
         id INTEGER PRIMARY KEY AUTOINCREMENT, created TEXT, user_id INTEGER,
         full_name TEXT, wereda TEXT, zone TEXT, house_no TEXT, detail TEXT,
@@ -145,17 +150,26 @@ def comment_value(t):
     return "" if t == "-" else t
 
 
+def photo_choice_value(t):
+    if t == BTN_PHOTO_YES:
+        return "yes"
+    if t == BTN_PHOTO_NO:
+        return "no"
+    return None
+
+
 def Q(key, prompt, check=any_text, error="እባክዎ እንደገና ይጻፉ።", markup=None):
     return {"key": key, "prompt": prompt, "check": check, "error": error, "markup": markup}
 
 
 # ============================================================
-#  የውይይት ደረጃዎች (flow) - ጥያቄዎቹ በቅደም ተከተል ይጠየቃሉ
+#  የውይይት ደረጃዎች መጨረሻ
 # ============================================================
 async def finish_tip(update, context, d):
     execute(
-        "INSERT INTO suggestions (created, wereda, zone, place, detail) VALUES (?, ?, ?, ?, ?)",
-        (now(), d["wereda"], d["zone"], d["place"], d["details"]),
+        """INSERT INTO suggestions (created, wereda, zone, place, detail, photo_file_id)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (now(), d["wereda"], d["zone"], d["place"], d["details"], d.get("photo") or None),
     )
     await update.message.reply_text("ለሰጡን መረጃና ጥቆማ እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
 
@@ -195,6 +209,9 @@ async def finish_feedback(update, context, d):
     await update.message.reply_text("ስለሰጡን አስተያየት እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
 
 
+# ============================================================
+#  ጥያቄዎች (flow) - በቅደም ተከተል ይጠየቃሉ
+# ============================================================
 FLOWS = {
     "tip": {
         "questions": [
@@ -202,6 +219,10 @@ FLOWS = {
             Q("zone", "ቀጠናውን ይግለጹ (በቁጥርም ሆነ በፅሁፍ)።"),
             Q("place", "ልዩ ቦታውን ይግለጹ።"),
             Q("details", "የጥቆማውን ዝርዝር ሁኔታ ይግለጹ።"),
+            Q("photo_choice",
+              "ማስረጃ ፎቶ ካለዎት '📷 ፎቶ አለኝ' ይጫኑና ይላኩ፤ ከሌለ '❌ ፎቶ የለኝም' ይጫኑ።\n"
+              "(ፎቶው የሚታየው ለአስተዳዳሪዎች ብቻ ነው)",
+              photo_choice_value, "እባክዎ ከቁልፎቹ አንዱን ይጫኑ።", PHOTO_KEYBOARD),
         ],
         "finish": finish_tip,
     },
@@ -247,8 +268,13 @@ async def flow_answer(update, context, text):
         return await update.message.reply_text(q["error"], reply_markup=q["markup"] or FLOW_KEYBOARD)
 
     context.user_data["data"][q["key"]] = value
-    idx += 1
 
+    # ፎቶ አለኝ ከተባለ ፎቶው እስኪላክ እንጠብቃለን
+    if q["key"] == "photo_choice" and value == "yes":
+        context.user_data["awaiting_photo"] = True
+        return await update.message.reply_text("እባክዎ ፎቶውን አሁን ይላኩ።", reply_markup=FLOW_KEYBOARD)
+
+    idx += 1
     if idx < len(flow["questions"]):
         context.user_data["idx"] = idx
         nxt = flow["questions"][idx]
@@ -259,8 +285,15 @@ async def flow_answer(update, context, text):
     await flow["finish"](update, context, data)
 
 
+async def finish_pending_tip(update, context, photo_id):
+    data = context.user_data.get("data", {})
+    data["photo"] = photo_id
+    context.user_data.clear()
+    await finish_tip(update, context, data)
+
+
 # ============================================================
-#  ዋና ምናሌ እና ቁልፎች
+#  ዋና ማውጫ እና ቁልፎች
 # ============================================================
 async def show_home(update, context):
     context.user_data.clear()
@@ -282,6 +315,7 @@ async def send_pdf(update, key):
 async def on_text(update, context):
     text = update.message.text.strip()
 
+    # ዋና ማውጫና ምናሌ ቁልፎች ሁልጊዜ ቅድሚያ አላቸው
     if text == BTN_HOME:
         return await show_home(update, context)
     if text == BTN_TIP:
@@ -304,11 +338,27 @@ async def on_text(update, context):
         context.user_data.clear()
         return await send_pdf(update, "standards")
 
+    # ፎቶ እየተጠበቀ ከሆነ
+    if context.user_data.get("awaiting_photo"):
+        if text == BTN_PHOTO_NO:
+            return await finish_pending_tip(update, context, None)
+        return await update.message.reply_text(
+            "እባክዎ ፎቶውን ይላኩ፤ ፎቶ ከሌለ '❌ ፎቶ የለኝም' ይጫኑ።", reply_markup=FLOW_KEYBOARD
+        )
+
     # በውይይት ውስጥ ከሆነ መልሱን ያስቀምጣል
     if "flow" in context.user_data:
         return await flow_answer(update, context, text)
 
     await update.message.reply_text("እባክዎ ከታች ካሉት ቁልፎች አንዱን ይምረጡ።", reply_markup=MAIN_KEYBOARD)
+
+
+async def on_photo(update, context):
+    if not context.user_data.get("awaiting_photo"):
+        return await update.message.reply_text(
+            "ፎቶ መላክ የሚቻለው ጥቆማ ሲሰጡ ብቻ ነው።", reply_markup=MAIN_KEYBOARD
+        )
+    await finish_pending_tip(update, context, update.message.photo[-1].file_id)
 
 
 # ============================================================
@@ -330,6 +380,7 @@ async def cmd_admin(update, context):
         "/complaint ቁጥር - የአንድ ቅሬታ ዝርዝር\n"
         "/reply ቁጥር ምላሽ - ለቅሬታ ምላሽ መስጠት\n"
         "/suggestions - የጥቆማዎች ዝርዝር (የመጨረሻዎቹ 10)\n"
+        "/photo ቁጥር - የጥቆማ ፎቶ ማየት\n"
         "/feedbacks - የአስተያየቶች ማጠቃለያ"
     )
 
@@ -392,11 +443,28 @@ async def cmd_suggestions(update, context):
     rows = execute("SELECT * FROM suggestions ORDER BY id DESC LIMIT 10", fetch=True)
     if not rows:
         return await update.message.reply_text("ምንም ጥቆማ የለም።")
-    text = "\n\n".join(
-        f"#{r['id']} ({r['created']})\nወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቦታ: {r['place']}\n{r['detail']}"
-        for r in rows
+    lines = []
+    for r in rows:
+        photo = "📷 አለ" if r["photo_file_id"] else "የለም"
+        lines.append(
+            f"#{r['id']} ({r['created']})\n"
+            f"ወረዳ: {r['wereda']} | ቀጠና: {r['zone']} | ቦታ: {r['place']}\n"
+            f"{r['detail']}\nፎቶ: {photo}"
+        )
+    await update.message.reply_text("\n\n".join(lines)[:4000])
+
+
+async def cmd_photo(update, context):
+    if not await is_admin(update):
+        return
+    if not context.args or not context.args[0].isdigit():
+        return await update.message.reply_text("አጠቃቀም: /photo ቁጥር")
+    rows = execute(
+        "SELECT photo_file_id FROM suggestions WHERE id = ?", (int(context.args[0]),), fetch=True
     )
-    await update.message.reply_text(text[:4000])
+    if not rows or not rows[0]["photo_file_id"]:
+        return await update.message.reply_text("ለዚህ ጥቆማ ፎቶ የለም።")
+    await update.message.reply_photo(rows[0]["photo_file_id"])
 
 
 async def cmd_feedbacks(update, context):
@@ -424,7 +492,9 @@ application.add_handler(CommandHandler("complaints", cmd_complaints))
 application.add_handler(CommandHandler("complaint", cmd_complaint))
 application.add_handler(CommandHandler("reply", cmd_reply))
 application.add_handler(CommandHandler("suggestions", cmd_suggestions))
+application.add_handler(CommandHandler("photo", cmd_photo))
 application.add_handler(CommandHandler("feedbacks", cmd_feedbacks))
+application.add_handler(MessageHandler(filters.PHOTO, on_photo))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 application.add_error_handler(on_error)
 
@@ -449,7 +519,6 @@ async def bot_startup():
     update_queue = asyncio.Queue()
     await application.initialize()
     await application.start()
-    # webhook ወዲያውኑ ይዘጋጃል፤ ቴሌግራም መልዕክት መላክ የሚጀምረው በዚህ ምክንያት ነው
     await application.bot.set_webhook(
         url=f"{PUBLIC_URL}/webhook",
         secret_token=WEBHOOK_SECRET or None,
@@ -478,7 +547,6 @@ def webhook():
     data = request.get_json(silent=True)
     if data:
         update = Update.de_json(data, application.bot)
-        # ወዲያውኑ ወረፋ ውስጥ ይገባል፤ ቴሌግራም በፍጥነት ምላሽ ያገኛል
         asyncio.run_coroutine_threadsafe(update_queue.put(update), bot_loop)
     return "OK", 200
 

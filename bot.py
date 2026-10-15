@@ -22,7 +22,7 @@ TOKEN = os.environ.get("TELEGRAM_TOKEN")
 # ቴሌግራም አፕሊኬሽን ማዋቀር
 application = Application.builder().token(TOKEN).build()
 
-# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር
+# ቋሚ የጀርባ ኢቨንት ሉፕ ማዋቀር (ለስቴት እና ለተጠቃሚ መረጃዎች ደህንነት)
 bot_loop = asyncio.new_event_loop()
 
 def start_background_loop(loop):
@@ -48,18 +48,21 @@ def load_pdfs():
 
 load_pdfs()
 
-# ቦቱን አፕሊኬሽን አንዴ ብቻ ማስጀመር
+# ቦቱን አንዴ ብቻ የማዋቀር ሂደት
 is_bot_initialized = False
+init_lock = threading.Lock()
 
-async def initialize_bot_once():
+async def ensure_bot_initialized():
     global is_bot_initialized
     if not is_bot_initialized:
-        await application.initialize()
-        await application.start()
-        await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
-        is_bot_initialized = True
-
-asyncio.run_coroutine_threadsafe(initialize_bot_once(), bot_loop)
+        with init_lock:
+            if not is_bot_initialized:
+                if not application.running:
+                    await application.initialize()
+                    await application.start()
+                await application.bot.set_webhook(url="https://llideta-security-bot.onrender.com/webhook")
+                is_bot_initialized = True
+                logger.info("Bot successfully initialized and Webhook set!")
 
 # ==========================================
 # 1. የ /start ትዕዛዝ እና 6ቱ ዋና ዋና ሜኑ በተኖች
@@ -276,10 +279,11 @@ def webhook():
         json_data = request.get_json()
         update = Update.de_json(json_data, application.bot)
         
-        # ዌብሁኩ ሲመጣ አፕሊኬሽኑን እንደገና ሳይከፍት በቀጥታ ሂደቱን በጀርባ ሉፕ ማስተናገድ
-        asyncio.run_coroutine_threadsafe(
-            application.process_update(update), bot_loop
-        )
+        async def process_webhook():
+            await ensure_bot_initialized()
+            await application.process_update(update)
+
+        asyncio.run_coroutine_threadsafe(process_webhook(), bot_loop)
             
     return 'OK', 200
 

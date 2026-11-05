@@ -103,7 +103,7 @@ BTN_EMERGENCY = "🚓 የፖሊስ ጣቢያና የእሳት አደጋ ስልኮ
 BTN_POLICE_HQ = "👮 ልደታ ፖሊስ መምሪያ"
 BTN_POLICE_STATIONS = "🚓 ፖሊስ ጣቢያዎች"
 BTN_FIRE = "🔥 የእሳት አደጋ"
-BTN_BACK_EMERGENCY = "⬅️ ወደ ድንገተኛ ምናሌ"
+BTN_BACK_EMERGENCY = "⬅️ ወደ ድንገተኛ ማውጫ"
 
 EMERGENCY_NOTE = "ድንገተኛ ሁኔታ ካለ በቀጥታ ይደውሉ። ቦቱ ለአስቸኳይ ምላሽ አይጠቅምም።"
 

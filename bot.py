@@ -100,6 +100,35 @@ BTN_HOME = "🏠 ዋና ማውጫ"
 BTN_PHOTO_YES = "📷 ፎቶ አለኝ"
 BTN_PHOTO_NO = "❌ ፎቶ የለኝም"
 BTN_EMERGENCY = "🚨 የአስቸኳይ ጊዜ ስልኮች"
+BTN_POLICE_HQ = "👮 ልደታ ፖሊስ መምሪያ"
+BTN_POLICE_STATIONS = "🚓 ፖሊስ ጣቢያዎች"
+BTN_FIRE = "🔥 የእሳት አደጋ"
+BTN_BACK_EMERGENCY = "⬅️ ወደ ድንገተኛ ምናሌ"
+
+EMERGENCY_NOTE = "ድንገተኛ ሁኔታ ካለ በቀጥታ ይደውሉ። ቦቱ ለአስቸኳይ ምላሽ አይጠቅምም።"
+
+POLICE_STATIONS = {
+    "ወረዳ 1 (ልደታ ፍርድ ቤት)": "0115583306",
+    "ወረዳ 2 (ጦርሀይሎች)": "0113728516",
+    "ወረዳ 3 (አብነት)": "0112130402",
+    "ወረዳ 4 (ሳርቤት)": "0113698377",
+    "ወረዳ 5 (ከረዩ)": "0115572339",
+    "ወረዳ 6 (መካኒሳ)": "0113201372",
+    "ወረዳ 7 (ጎማ ቁጠባ)": "0115529402",
+    "ወረዳ 9 (ጌጃ)": "0111230436",
+    "ወረዳ 10 (ባልቻ)": "0115529406",
+}
+
+EMERGENCY_MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [[BTN_POLICE_HQ], [BTN_POLICE_STATIONS], [BTN_FIRE], [BTN_HOME]],
+    resize_keyboard=True,
+)
+
+POLICE_STATIONS_KEYBOARD = ReplyKeyboardMarkup(
+    [[name] for name in POLICE_STATIONS] + [[BTN_BACK_EMERGENCY], [BTN_HOME]],
+    resize_keyboard=True,
+)
+EMERGENCY_TEXT = "🚨 የአስቸኳይ ጊዜ ስልኮች\n\n" + EMERGENCY_NOTE + "\n\nከታች አንዱን ይምረጡ።"
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_GUIDES], [BTN_STANDARDS],
      [BTN_FEEDBACK], [BTN_EMERGENCY], [BTN_HOME]],
@@ -380,9 +409,34 @@ async def on_text(update, context):
     if text == BTN_STANDARDS:
         context.user_data.clear()
         return await send_pdf(update, "standards")
-    if text == BTN_EMERGENCY:
+        if text == BTN_EMERGENCY:
         context.user_data.clear()
-        return await update.message.reply_text(EMERGENCY_TEXT, reply_markup=MAIN_KEYBOARD)
+        return await update.message.reply_text(EMERGENCY_TEXT, reply_markup=EMERGENCY_MAIN_KEYBOARD)
+
+    if text == BTN_POLICE_HQ:
+        return await update.message.reply_text(
+            "👮 ልደታ ፖሊስ መምሪያ\n\n" + "0115153760", reply_markup=EMERGENCY_MAIN_KEYBOARD
+        )
+
+    if text == BTN_POLICE_STATIONS:
+        return await update.message.reply_text(
+            "🚓 ፖሊስ ጣቢያ ይምረጡ፦", reply_markup=POLICE_STATIONS_KEYBOARD
+        )
+
+    if text == BTN_FIRE:
+        return await update.message.reply_text(
+            "🔥 የእሳትና ድንገተኛ አደጋ\n\n"
+            "ነፃ ስልክ: 939\n"
+            "ልደታ ቅርንጫፍ: 0115589533\n"
+            "ልደታ ቅርንጫፍ: 0115589043",
+            reply_markup=EMERGENCY_MAIN_KEYBOARD,
+        )
+
+    if text == BTN_BACK_EMERGENCY:
+        return await update.message.reply_text(EMERGENCY_TEXT, reply_markup=EMERGENCY_MAIN_KEYBOARD)
+
+    if text in POLICE_STATIONS:
+        return await update.message.reply_text(POLICE_STATIONS[text], reply_markup=POLICE_STATIONS_KEYBOARD)
     # ፎቶ እየተጠበቀ ከሆነ
     if context.user_data.get("awaiting_photo"):
         if text == BTN_PHOTO_NO:

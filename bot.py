@@ -99,6 +99,7 @@ BTN_FEEDBACK = "6/አገልግሎቶች ላይ አስተያየት ለመስጠ�
 BTN_HOME = "🏠 ዋና ማውጫ"
 BTN_PHOTO_YES = "📷 ፎቶ አለኝ"
 BTN_PHOTO_NO = "❌ ፎቶ የለኝም"
+BTN_STATUS = "🔎 የቅሬታዬን ሁኔታ ለማወቅ"
 BTN_EMERGENCY = "🚓 የፖሊስ ጣቢያና የእሳት አደጋ ስልኮች"
 BTN_POLICE_HQ = "👮 ልደታ ፖሊስ መምሪያ"
 BTN_POLICE_STATIONS = "🚓 ፖሊስ ጣቢያዎች"
@@ -130,8 +131,8 @@ POLICE_STATIONS_KEYBOARD = ReplyKeyboardMarkup(
 )
 EMERGENCY_TEXT = "🚨 የአስቸኳይ ጊዜ ስልኮች\n\n" + EMERGENCY_NOTE + "\n\nከታች አንዱን ይምረጡ።"
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_GUIDES], [BTN_STANDARDS],
-     [BTN_FEEDBACK], [BTN_EMERGENCY], [BTN_HOME]],
+    [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_STATUS], [BTN_GUIDES],
+     [BTN_STANDARDS], [BTN_FEEDBACK], [BTN_EMERGENCY], [BTN_HOME]],
     resize_keyboard=True,
 )
 FLOW_KEYBOARD = ReplyKeyboardMarkup([[BTN_HOME]], resize_keyboard=True)
@@ -269,7 +270,29 @@ async def finish_complaint(update, context, d):
 async def finish_feedback(update, context, d):
     add_row("feedback", [now(), d["rating"], d["comment"]])
     await update.message.reply_text("ስለሰጡን አስተያየት እናመሰግናለን!", reply_markup=MAIN_KEYBOARD)
+def phone_key(p):
+    """ስልክ ቁጥርን ለማነጻጸር ቁጥሮቹን ብቻ ወስዶ የመጨረሻዎቹን 9 ያስቀራል።"""
+    digits = "".join(ch for ch in str(p) if ch.isdigit())
+    return digits[-9:] if len(digits) >= 9 else digits
 
+
+async def finish_status(update, context, d):
+    rid = int(d["cid"])
+    r = get_record("complaints", rid)
+
+    # ቁጥሩና ስልኩ ሁለቱም ካልተዛመዱ ምንም መረጃ አይሰጥም
+    if not r or phone_key(r["phone"]) != phone_key(d["phone"]):
+        return await update.message.reply_text(
+            "ይቅርታ፣ ይህ ቁጥርና ስልክ ተዛማጅ ቅሬታ አልተገኘም። እባክዎ ቁጥሩንና ስልኩን በትክክል ያረጋግጡ።",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
+    text = f"📋 የቅሬታ ቁጥር {rid}\nሁኔታ: {r['status'] or 'አዲስ'}"
+    if r["reply"]:
+        text += f"\n\nምላሽ:\n{r['reply']}"
+    else:
+        text += "\n\nምላሽ ገና አልተሰጠም። በአጭር ጊዜ ውስጥ ምላሽ እንሰጥዎታለን።"
+    await update.message.reply_text(text, reply_markup=MAIN_KEYBOARD)
 
 # ============================================================
 #  ጥያቄዎች (flow) - በቅደም ተከተል ይጠየቃሉ
@@ -310,7 +333,15 @@ FLOWS = {
         "finish": finish_feedback,
     },
 }
-
+    "status": {
+        "questions": [
+            Q("cid", "የቅሬታ ቁጥርዎን ያስገቡ (በቁጥር ብቻ)።",
+              digits_only, "እባክዎ የቅሬታ ቁጥርዎን በቁጥር ብቻ ያስገቡ።"),
+            Q("phone", "ቅሬታ ሲያስገቡ የሰጡትን ስልክ ቁጥር ያስገቡ (በቁጥር ብቻ)።",
+              phone_only, "እባክዎ ትክክለኛ ስልክ ቁጥር በቁጥር ብቻ ያስገቡ።"),
+        ],
+        "finish": finish_status,
+    },
 
 async def start_flow(update, context, name):
     context.user_data.clear()
@@ -396,7 +427,8 @@ async def on_text(update, context):
         return await start_flow(update, context, "complaint")
     if text == BTN_FEEDBACK:
         return await start_flow(update, context, "feedback")
-
+    if text == BTN_STATUS:
+        return await start_flow(update, context, "status")
     # ቀጥታ ምላሽ የሚሰጡ ቁልፎች
     if text == BTN_VISION:
         context.user_data.clear()

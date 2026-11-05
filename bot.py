@@ -69,7 +69,24 @@ VISION_FULL = (
     "• ሚስጥር ጠባቂነት (Confidentiality)\n"
     "• ለዘላቂ ሰላም መትጋት (Strive For Sustainable Peace)"
 )
-
+EMERGENCY_TEXT = (
+    "🚨 የአስቸኳይ ጊዜ ስልኮች\n\n"
+    "ድንገተኛ ሁኔታ ካለ በቀጥታ ይደውሉ። ቦቱ ለአስቸኳይ ምላሽ አይጠቅምም።\n\n"
+    "👮 ልደታ ፖሊስ መምሪያ: 0115153760\n\n"
+    "🚓 ፖሊስ ጣቢያዎች:\n"
+    "• ወረዳ 1 (ልደታ ፍርድ ቤት አካባቢ): 0115583306\n"
+    "• ወረዳ 2 (ጦርሀይሎች አካባቢ): 0113728516\n"
+    "• ወረዳ 3 (አብነት): 0112130402\n"
+    "• ወረዳ 4 (ሳርቤት አካባቢ): 0113698377\n"
+    "• ወረዳ 5 (ከረዩ): 0115572339\n"
+    "• ወረዳ 6 (መካኒሳ አካባቢ): 0113201372\n"
+    "• ወረዳ 7 (ጎማ ቁጠባ): 0115529402\n"
+    "• ወረዳ 9 (ጌጃ አካባቢ): 0111230436\n"
+    "• ወረዳ 10 (ባልቻ): 0115529406\n\n"
+    "🔥 እሳትና ድንገተኛ አደጋ\n"
+    "• ነፃ ስልክ: 939\n"
+    "• ልደታ ቅርንጫፍ: 0115589533 / 0115589043"
+)
 # ============================================================
 #  ቁልፎች
 # ============================================================
@@ -82,10 +99,12 @@ BTN_FEEDBACK = "6/አገልግሎቶች ላይ አስተያየት ለመስጠ�
 BTN_HOME = "🏠 ዋና ማውጫ"
 BTN_PHOTO_YES = "📷 ፎቶ አለኝ"
 BTN_PHOTO_NO = "❌ ፎቶ የለኝም"
-
+BTN_EMERGENCY = "🚨 የአስቸኳይ ጊዜ ስልኮች"
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
-    [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_GUIDES], [BTN_STANDARDS], [BTN_FEEDBACK], [BTN_HOME]],
+    [[BTN_TIP], [BTN_VISION], [BTN_COMPLAINT], [BTN_GUIDES], [BTN_STANDARDS],
+     [BTN_FEEDBACK], [BTN_EMERGENCY], [BTN_HOME]],
     resize_keyboard=True,
+)
 )
 FLOW_KEYBOARD = ReplyKeyboardMarkup([[BTN_HOME]], resize_keyboard=True)
 PHOTO_KEYBOARD = ReplyKeyboardMarkup([[BTN_PHOTO_YES], [BTN_PHOTO_NO], [BTN_HOME]], resize_keyboard=True)
@@ -362,7 +381,9 @@ async def on_text(update, context):
     if text == BTN_STANDARDS:
         context.user_data.clear()
         return await send_pdf(update, "standards")
-
+    if text == BTN_EMERGENCY:
+        context.user_data.clear()
+        return await update.message.reply_text(EMERGENCY_TEXT, reply_markup=MAIN_KEYBOARD)
     # ፎቶ እየተጠበቀ ከሆነ
     if context.user_data.get("awaiting_photo"):
         if text == BTN_PHOTO_NO:

@@ -387,7 +387,7 @@ async def send_pdf(update, key):
 async def on_text(update, context):
     text = update.message.text.strip()
 
-    # ዋና ማውጫና ምናሌ ቁልፎች ሁልጊዜ ቅድሚያ አላቸው
+    # ዋና ማውጫና ምናሌ ቁልፎች
     if text == BTN_HOME:
         return await show_home(update, context)
     if text == BTN_TIP:
@@ -397,7 +397,7 @@ async def on_text(update, context):
     if text == BTN_FEEDBACK:
         return await start_flow(update, context, "feedback")
 
-    # ቀጥታ ምላሽ የሚሰጡ ቁልፎች - የቀድሞው ውይይት ካለ ያጠፋሉ
+    # ቀጥታ ምላሽ የሚሰጡ ቁልፎች
     if text == BTN_VISION:
         context.user_data.clear()
         return await update.message.reply_text(VISION_FULL, reply_markup=MAIN_KEYBOARD)
@@ -405,24 +405,25 @@ async def on_text(update, context):
         context.user_data.clear()
         for key in ("peace", "fee", "loader"):
             await send_pdf(update, key)
-        return await update.message.reply_text("ከላይ ያሉትን መመሪያዎች አውርደው ማየት ይችላሉ።", reply_markup=MAIN_KEYBOARD)
+        return await update.message.reply_text(
+            "ከላይ ያሉትን መመሪያዎች አውርደው ማየት ይችላሉ።", reply_markup=MAIN_KEYBOARD
+        )
     if text == BTN_STANDARDS:
         context.user_data.clear()
         return await send_pdf(update, "standards")
-        if text == BTN_EMERGENCY:
+
+    # የአስቸኳይ ጊዜ ስልኮች
+    if text == BTN_EMERGENCY:
         context.user_data.clear()
         return await update.message.reply_text(EMERGENCY_TEXT, reply_markup=EMERGENCY_MAIN_KEYBOARD)
-
     if text == BTN_POLICE_HQ:
         return await update.message.reply_text(
-            "👮 ልደታ ፖሊስ መምሪያ\n\n" + "0115153760", reply_markup=EMERGENCY_MAIN_KEYBOARD
+            "👮 ልደታ ፖሊስ መምሪያ\n\n0115153760", reply_markup=EMERGENCY_MAIN_KEYBOARD
         )
-
     if text == BTN_POLICE_STATIONS:
         return await update.message.reply_text(
             "🚓 ፖሊስ ጣቢያ ይምረጡ፦", reply_markup=POLICE_STATIONS_KEYBOARD
         )
-
     if text == BTN_FIRE:
         return await update.message.reply_text(
             "🔥 የእሳትና ድንገተኛ አደጋ\n\n"
@@ -431,12 +432,13 @@ async def on_text(update, context):
             "ልደታ ቅርንጫፍ: 0115589043",
             reply_markup=EMERGENCY_MAIN_KEYBOARD,
         )
-
     if text == BTN_BACK_EMERGENCY:
         return await update.message.reply_text(EMERGENCY_TEXT, reply_markup=EMERGENCY_MAIN_KEYBOARD)
-
     if text in POLICE_STATIONS:
-        return await update.message.reply_text(POLICE_STATIONS[text], reply_markup=POLICE_STATIONS_KEYBOARD)
+        return await update.message.reply_text(
+            POLICE_STATIONS[text], reply_markup=POLICE_STATIONS_KEYBOARD
+        )
+
     # ፎቶ እየተጠበቀ ከሆነ
     if context.user_data.get("awaiting_photo"):
         if text == BTN_PHOTO_NO:
@@ -449,7 +451,9 @@ async def on_text(update, context):
     if "flow" in context.user_data:
         return await flow_answer(update, context, text)
 
-    await update.message.reply_text("እባክዎ ከታች ካሉት ቁልፎች አንዱን ይምረጡ።", reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text(
+        "እባክዎ ከታች ካሉት ቁልፎች አንዱን ይምረጡ።", reply_markup=MAIN_KEYBOARD
+    )
 
 
 async def on_photo(update, context):

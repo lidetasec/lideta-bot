@@ -332,7 +332,6 @@ FLOWS = {
         ],
         "finish": finish_feedback,
     },
-}
     "status": {
         "questions": [
             Q("cid", "የቅሬታ ቁጥርዎን ያስገቡ (በቁጥር ብቻ)።",
@@ -342,6 +341,7 @@ FLOWS = {
         ],
         "finish": finish_status,
     },
+}
 
 async def start_flow(update, context, name):
     context.user_data.clear()

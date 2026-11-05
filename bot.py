@@ -105,7 +105,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
      [BTN_FEEDBACK], [BTN_EMERGENCY], [BTN_HOME]],
     resize_keyboard=True,
 )
-)
 FLOW_KEYBOARD = ReplyKeyboardMarkup([[BTN_HOME]], resize_keyboard=True)
 PHOTO_KEYBOARD = ReplyKeyboardMarkup([[BTN_PHOTO_YES], [BTN_PHOTO_NO], [BTN_HOME]], resize_keyboard=True)
 
